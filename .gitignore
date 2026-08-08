@@ -1,0 +1,28 @@
+*.iml
+.gradle/
+.gradle-user-home/
+.kotlin/
+.idea/
+local.properties
+**/build/
+**/.externalNativeBuild/
+**/.cxx/
+**/node_modules/
+**/dist/
+**/coverage/
+**/.pytest_cache/
+**/__pycache__/
+**/.venv/
+*.pyc
+.env
+.env.*
+!.env.example
+.DS_Store
+captures/
+
+# El SDK de Samsung Health Sensor se descarga por separado y no se redistribuye.
+apps/wear/libs/*.aar
+
+# Llaves locales de firma de Android.
+*.keystore
+*.jks

@@ -1,0 +1,10 @@
+**/build
+**/dist
+**/node_modules
+**/.gradle
+**/.idea
+apps/mobile/android
+apps/mobile/ios
+gradlew
+gradlew.bat
+package-lock.json

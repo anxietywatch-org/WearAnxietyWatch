@@ -1,0 +1,32 @@
+{
+  "name": "anxietywatch",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Monorepositorio de AnxietyWatch",
+  "packageManager": "npm@11.16.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "workspaces": [
+    "apps/mobile",
+    "apps/web",
+    "services/api",
+    "packages/contracts"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @anxietywatch/contracts && npm run build --workspace @anxietywatch/api && npm run build --workspace @anxietywatch/web",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "eslint apps/web/src services/api/src packages/contracts/src && npm run lint --workspace @anxietywatch/mobile",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "dev:api": "npm run dev --workspace @anxietywatch/api",
+    "dev:web": "npm run dev --workspace @anxietywatch/web",
+    "dev:mobile": "npm run start --workspace @anxietywatch/mobile"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "eslint": "^9.39.0",
+    "prettier": "^3.7.0",
+    "typescript-eslint": "^8.46.0"
+  }
+}

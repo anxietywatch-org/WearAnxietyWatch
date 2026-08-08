@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">AnxietyWatch</string>
+    <string name="monitoring_title">Monitoreo preparado</string>
+    <string name="monitoring_description">Los sensores se conectarán en la siguiente entrega.</string>
+    <string name="wellness_notice">Herramienta de bienestar; no representa un diagnóstico médico.</string>
+    <string name="sensor_status">Sensores simulados</string>
+    <string name="phone_status">Teléfono no vinculado</string>
+</resources>

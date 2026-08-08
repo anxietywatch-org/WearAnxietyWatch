@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- Ignora IconLocation para las imágenes de vista previa de las tarjetas. -->
+    <issue id="IconLocation">
+        <ignore path="res/drawable/tile_preview.png" />
+        <ignore path="res/drawable-round/tile_preview.png" />
+    </issue>
+</lint>
