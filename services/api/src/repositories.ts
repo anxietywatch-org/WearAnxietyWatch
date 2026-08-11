@@ -1,4 +1,4 @@
-import type { SosTrigger, TelemetryBatch } from '@anxietywatch/contracts';
+import type { SosCancel, SosTrigger, TelemetryBatch } from '@anxietywatch/contracts';
 
 export interface TelemetryRepository {
   saveIfNew(batch: TelemetryBatch): boolean;
@@ -6,6 +6,7 @@ export interface TelemetryRepository {
 
 export interface SosEventRepository {
   saveIfNew(event: SosTrigger): boolean;
+  cancel(event: SosCancel): boolean;
 }
 
 export interface PushNotifier {
@@ -24,10 +25,17 @@ export class InMemoryTelemetryRepository implements TelemetryRepository {
 
 export class InMemorySosEventRepository implements SosEventRepository {
   private readonly events = new Map<string, SosTrigger>();
+  private readonly cancelled = new Set<string>();
 
   saveIfNew(event: SosTrigger): boolean {
     if (this.events.has(event.eventId)) return false;
     this.events.set(event.eventId, event);
+    return true;
+  }
+
+  cancel(event: SosCancel): boolean {
+    if (this.cancelled.has(event.eventId)) return false;
+    this.cancelled.add(event.eventId);
     return true;
   }
 }

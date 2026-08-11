@@ -1,0 +1,141 @@
+package com.anxietywatch.mobile.fog
+
+import android.content.Context
+import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.ReactContextBaseJavaModule
+import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.ReadableMap
+import com.facebook.react.bridge.WritableMap
+import com.facebook.react.bridge.Arguments
+import com.facebook.react.modules.core.DeviceEventManagerModule
+import com.google.android.gms.wearable.Node
+import com.google.android.gms.wearable.Wearable
+import org.json.JSONObject
+
+/**
+ * API de JavaScript para el nodo fog.
+ *
+ *  - `peek()`: recoge los sobres pendientes del reloj.
+ *  - `complete()`: elimina un sobre de la cola tras entregarlo.
+ *  - `ackTelemetry()` / `ackSos()` / `ackSosCancel()`: confirman entrega al reloj
+ *    por identificador (`/fog/v1/ack/telemetry/{id}`, ...).
+ *  - `announceFogPhone()`: anuncia al reloj el protocolo fog del teléfono.
+ *  - `getIdentity()` / `setIdentity()` / `nextSequence()`: identidad fog persistente.
+ */
+class WearFogModule(private val reactContext: ReactApplicationContext) :
+    ReactContextBaseJavaModule(reactContext) {
+
+    private val prefs by lazy {
+        reactContext.getSharedPreferences("fog_identity", Context.MODE_PRIVATE)
+    }
+
+    override fun getName(): String = "WearFog"
+
+    init {
+        FogBridge.setEmitListener { envelope ->
+            try {
+                val params: WritableMap = Arguments.createMap().apply {
+                    putString("envelope", envelope)
+                }
+                reactContext
+                    .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+                    .emit("FogInbound", params)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    @ReactMethod
+    fun peek(promise: Promise) {
+        promise.resolve(FogBridge.peekInbound(reactContext))
+    }
+
+    @ReactMethod
+    fun complete(key: String, promise: Promise) {
+        FogBridge.completeInbound(reactContext, key)
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    fun inboundCount(promise: Promise) {
+        promise.resolve(FogBridge.inboundCount(reactContext).toDouble())
+    }
+
+    @ReactMethod
+    fun getIdentity(promise: Promise) {
+        promise.resolve(
+            JSONObject()
+                .put("userId", prefs.getString("userId", ""))
+                .put("deviceId", prefs.getString("deviceId", ""))
+                .put("sessionId", prefs.getString("sessionId", ""))
+                .put("sequence", prefs.getLong("sequence", 0L))
+                .toString(),
+        )
+    }
+
+    @ReactMethod
+    fun setIdentity(identity: ReadableMap, promise: Promise) {
+        prefs.edit()
+            .putString("userId", identity.getString("userId") ?: prefs.getString("userId", ""))
+            .putString("deviceId", identity.getString("deviceId") ?: prefs.getString("deviceId", ""))
+            .putString("sessionId", identity.getString("sessionId") ?: prefs.getString("sessionId", ""))
+            .apply()
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    fun nextSequence(promise: Promise) {
+        val next = prefs.getLong("sequence", 0L) + 1
+        prefs.edit().putLong("sequence", next).apply()
+        promise.resolve(next.toDouble())
+    }
+
+    @ReactMethod
+    fun ackTelemetry(batchId: String, promise: Promise) {
+        sendAckToWear(reactContext, WearFogListenerService.ACK_TELEMETRY_PREFIX + batchId)
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    fun ackSos(eventId: String, promise: Promise) {
+        sendAckToWear(reactContext, WearFogListenerService.ACK_SOS_PREFIX + eventId)
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    fun ackSosCancel(eventId: String, promise: Promise) {
+        sendAckToWear(reactContext, WearFogListenerService.ACK_SOS_CANCEL_PREFIX + eventId)
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    fun announceFogPhone(promise: Promise) {
+        val payload = JSONObject()
+            .put("schemaVersion", "fog-capabilities-v1")
+            .put("targetEndpoint", "/fog/v1/capabilities")
+            .put("transport", "WEAR_DATA_LAYER")
+            .put("fogProtocol", WearFogListenerService.FOG_PHONE_PROTOCOL)
+            .put("deviceModel", android.os.Build.MODEL)
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+        sendMessageToWear(reactContext, "/fog/v1/capabilities", payload)
+        promise.resolve(true)
+    }
+
+    companion object {
+        fun sendAckToWear(context: ReactApplicationContext, route: String) {
+            sendMessageToWear(context, route, ByteArray(0))
+        }
+
+        private fun sendMessageToWear(context: ReactApplicationContext, route: String, payload: ByteArray) {
+            val messageClient = Wearable.getMessageClient(context)
+            val nodeClient = Wearable.getNodeClient(context)
+            nodeClient.connectedNodes.addOnCompleteListener { task ->
+                for (node: Node in task.result ?: emptyList()) {
+                    messageClient.sendMessage(node.id, route, payload)
+                }
+            }
+        }
+    }
+}

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import {
+  sosCancelSchema,
   sosTriggerSchema,
   telemetryBatchSchema,
   type HealthStatus,
@@ -75,6 +76,26 @@ app.post(
       );
     }
 
+    response.status(accepted ? 202 : 200).json({
+      eventId: result.data.eventId,
+      accepted,
+      duplicate: !accepted,
+    });
+  },
+);
+
+app.post(
+  '/api/v1/sos/cancel',
+  (request: Request, response: Response) => {
+    const result = sosCancelSchema.safeParse(request.body);
+    if (!result.success) {
+      response
+        .status(400)
+        .json({ error: 'invalid_request', issues: result.error.issues });
+      return;
+    }
+
+    const accepted = sosEventRepository.cancel(result.data);
     response.status(accepted ? 202 : 200).json({
       eventId: result.data.eventId,
       accepted,

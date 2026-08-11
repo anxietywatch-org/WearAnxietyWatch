@@ -93,6 +93,14 @@ export const sosTriggerSchema = z.object({
   reason: z.string().trim().min(1).max(500).nullable().optional(),
 });
 
+export const sosCancelSchema = z.object({
+  eventId: uuid,
+  userId: uuid,
+  deviceId: uuid,
+  cancelledAt: isoDateTime,
+  reason: z.string().trim().min(1).max(500).nullable().optional(),
+});
+
 export const suspiciousEventSchema = z.object({
   eventId: uuid,
   deviceId: uuid,
@@ -110,4 +118,5 @@ export type TelemetrySample = z.infer<typeof telemetrySampleSchema>;
 export type TelemetryBatch = z.infer<typeof telemetryBatchSchema>;
 export type UserResponse = z.infer<typeof userResponseSchema>;
 export type SosTrigger = z.infer<typeof sosTriggerSchema>;
+export type SosCancel = z.infer<typeof sosCancelSchema>;
 export type SuspiciousEvent = z.infer<typeof suspiciousEventSchema>;
