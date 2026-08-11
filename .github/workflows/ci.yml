@@ -105,6 +105,18 @@ jobs:
       - run: npm ci
       - run: npm run test --workspace @anxietywatch/mobile -- --runInBand
       - run: chmod +x apps/mobile/android/gradlew
+      - name: Create debug keystore
+        run: |
+          keytool -genkeypair \
+            -storetype PKCS12 \
+            -keystore apps/mobile/android/app/debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
       - run: ./apps/mobile/android/gradlew -p apps/mobile/android assembleDebug
 
   ml:
