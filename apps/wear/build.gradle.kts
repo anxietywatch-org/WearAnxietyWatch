@@ -63,4 +63,6 @@ dependencies {
     debugImplementation(libs.ui.test.manifest)
     debugImplementation(libs.ui.tooling)
     testImplementation("junit:junit:4.13.2")
+    // Implementación real de org.json para los unit tests locales (AGP la deja como stub).
+    testImplementation("org.json:json:20240303")
 }

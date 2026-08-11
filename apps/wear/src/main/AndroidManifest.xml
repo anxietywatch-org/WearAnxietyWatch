@@ -56,6 +56,14 @@
             android:exported="true"
             android:permission="com.google.android.wearable.healthservices.permission.PASSIVE_DATA_BINDING" />
 
+        <service
+            android:name=".datalayer.WatchDataListenerService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.BIND_LISTENER" />
+            </intent-filter>
+        </service>
+
         <receiver
             android:name=".monitoring.StartupReceiver"
             android:enabled="true"

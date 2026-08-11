@@ -5,17 +5,37 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import com.anxietywatch.wear.domain.BaselineSnapshot
+import com.anxietywatch.wear.domain.MonitoringState
 import com.anxietywatch.wear.domain.PendingEvent
 import com.anxietywatch.wear.domain.SensorReading
+import com.anxietywatch.wear.domain.UserResponse
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
+
+enum class SyncState {
+    QUEUED,
+    SENT,
+    CONFIRMED,
+    FAILED,
+}
 
 data class StoredTelemetry(
     val id: String,
     val capturedAtEpochMillis: Long,
     val type: String,
     val payload: String,
+)
+
+data class StoredBatch(
+    val batchId: String,
+    val fromMillis: Long,
+    val toMillis: Long,
+    val state: SyncState,
+    val payload: String,
+    val attempts: Int,
+    val nextAttemptAt: Long,
+    val remoteAck: Boolean,
 )
 
 class WearDatabase(context: Context) : SQLiteOpenHelper(
@@ -32,12 +52,28 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
                 captured_at INTEGER NOT NULL,
                 type TEXT NOT NULL,
                 payload TEXT NOT NULL,
-                sync_state TEXT NOT NULL DEFAULT 'pending',
-                attempts INTEGER NOT NULL DEFAULT 0
+                sync_state TEXT NOT NULL DEFAULT 'queued',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                batch_id TEXT
             )
             """.trimIndent(),
         )
         db.execSQL("CREATE INDEX telemetry_sync_idx ON telemetry(sync_state, captured_at)")
+        db.execSQL(
+            """
+            CREATE TABLE sync_batches (
+                batch_id TEXT PRIMARY KEY,
+                from_millis INTEGER NOT NULL,
+                to_millis INTEGER NOT NULL,
+                state TEXT NOT NULL DEFAULT 'sent',
+                payload TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at INTEGER NOT NULL DEFAULT 0,
+                remote_ack INTEGER NOT NULL DEFAULT 0
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX batches_idx ON sync_batches(state, next_attempt_at)")
         db.execSQL(
             """
             CREATE TABLE events (
@@ -48,7 +84,11 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
                 trigger_score REAL NOT NULL,
                 rules_version TEXT NOT NULL,
                 user_response TEXT,
-                sos_status TEXT
+                sos_status TEXT,
+                sync_state TEXT NOT NULL DEFAULT 'queued',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at INTEGER NOT NULL DEFAULT 0,
+                remote_ack INTEGER NOT NULL DEFAULT 0
             )
             """.trimIndent(),
         )
@@ -73,7 +113,40 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
         )
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE telemetry ADD COLUMN batch_id TEXT")
+            db.execSQL("UPDATE telemetry SET sync_state = 'queued' WHERE sync_state = 'pending'")
+            db.execSQL("UPDATE telemetry SET sync_state = 'confirmed' WHERE sync_state = 'synced'")
+            db.execSQL(
+                """
+                CREATE TABLE sync_batches (
+                    batch_id TEXT PRIMARY KEY,
+                    from_millis INTEGER NOT NULL,
+                    to_millis INTEGER NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'sent',
+                    payload TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at INTEGER NOT NULL DEFAULT 0,
+                    remote_ack INTEGER NOT NULL DEFAULT 0
+                )
+                """.trimIndent(),
+            )
+            db.execSQL("CREATE INDEX batches_idx ON sync_batches(state, next_attempt_at)")
+            db.execSQL(
+                "ALTER TABLE events ADD COLUMN sync_state TEXT NOT NULL DEFAULT 'queued'",
+            )
+            db.execSQL(
+                "ALTER TABLE events ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
+            )
+            db.execSQL(
+                "ALTER TABLE events ADD COLUMN next_attempt_at INTEGER NOT NULL DEFAULT 0",
+            )
+            db.execSQL(
+                "ALTER TABLE events ADD COLUMN remote_ack INTEGER NOT NULL DEFAULT 0",
+            )
+        }
+    }
 
     @Synchronized
     fun insertReading(reading: SensorReading): String {
@@ -101,8 +174,8 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
         readableDatabase.query(
             "telemetry",
             arrayOf("id", "captured_at", "type", "payload"),
-            "sync_state = ?",
-            arrayOf("pending"),
+            "sync_state IN (?, ?)",
+            arrayOf(SyncState.QUEUED.name, SyncState.FAILED.name),
             null,
             null,
             "captured_at ASC",
@@ -122,12 +195,15 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
     }
 
     @Synchronized
-    fun markTelemetrySynced(ids: List<String>) {
+    fun markTelemetrySent(ids: List<String>, batchId: String) {
         if (ids.isEmpty()) return
         writableDatabase.beginTransaction()
         try {
             ids.forEach { id ->
-                val values = ContentValues().apply { put("sync_state", "synced") }
+                val values = ContentValues().apply {
+                    put("sync_state", SyncState.SENT.name)
+                    put("batch_id", batchId)
+                }
                 writableDatabase.update("telemetry", values, "id = ?", arrayOf(id))
             }
             writableDatabase.setTransactionSuccessful()
@@ -137,13 +213,100 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
     }
 
     @Synchronized
+    fun markTelemetryConfirmedByBatch(batchId: String) {
+        val values = ContentValues().apply { put("sync_state", SyncState.CONFIRMED.name) }
+        writableDatabase.update("telemetry", values, "batch_id = ?", arrayOf(batchId))
+    }
+
+    @Synchronized
+    fun markTelemetryFailed(ids: List<String>) {
+        if (ids.isEmpty()) return
+        writableDatabase.beginTransaction()
+        try {
+            ids.forEach { id ->
+                val values = ContentValues().apply { put("sync_state", SyncState.FAILED.name) }
+                writableDatabase.update("telemetry", values, "id = ?", arrayOf(id))
+            }
+            writableDatabase.setTransactionSuccessful()
+        } finally {
+            writableDatabase.endTransaction()
+        }
+    }
+
+    @Synchronized
+    fun upsertBatch(batch: StoredBatch) {
+        val values = ContentValues().apply {
+            put("batch_id", batch.batchId)
+            put("from_millis", batch.fromMillis)
+            put("to_millis", batch.toMillis)
+            put("state", batch.state.name)
+            put("payload", batch.payload)
+            put("attempts", batch.attempts)
+            put("next_attempt_at", batch.nextAttemptAt)
+            put("remote_ack", if (batch.remoteAck) 1 else 0)
+        }
+        writableDatabase.insertWithOnConflict(
+            "sync_batches",
+            null,
+            values,
+            SQLiteDatabase.CONFLICT_REPLACE,
+        )
+    }
+
+    @Synchronized
+    fun pendingBatches(now: Long): List<StoredBatch> = readableDatabase.query(
+        "sync_batches",
+        arrayOf("batch_id", "from_millis", "to_millis", "state", "payload", "attempts", "next_attempt_at", "remote_ack"),
+        "state IN (?, ?) AND next_attempt_at <= ?",
+        arrayOf(SyncState.SENT.name, SyncState.FAILED.name, now.toString()),
+        null,
+        null,
+        "next_attempt_at ASC",
+    ).use { cursor ->
+        val rows = mutableListOf<StoredBatch>()
+        while (cursor.moveToNext()) {
+            rows += StoredBatch(
+                batchId = cursor.getString(0),
+                fromMillis = cursor.getLong(1),
+                toMillis = cursor.getLong(2),
+                state = SyncState.valueOf(cursor.getString(3)),
+                payload = cursor.getString(4),
+                attempts = cursor.getInt(5),
+                nextAttemptAt = cursor.getLong(6),
+                remoteAck = cursor.getInt(7) == 1,
+            )
+        }
+        rows
+    }
+
+    @Synchronized
+    fun markBatchConfirmed(batchId: String) {
+        val values = ContentValues().apply {
+            put("state", SyncState.CONFIRMED.name)
+            put("remote_ack", 1)
+        }
+        writableDatabase.update("sync_batches", values, "batch_id = ?", arrayOf(batchId))
+    }
+
+    @Synchronized
+    fun markBatchFailed(batchId: String, attempts: Int, nextAttemptAt: Long) {
+        val values = ContentValues().apply {
+            put("state", SyncState.FAILED.name)
+            put("attempts", attempts)
+            put("next_attempt_at", nextAttemptAt)
+        }
+        writableDatabase.update("sync_batches", values, "batch_id = ?", arrayOf(batchId))
+    }
+
+    @Synchronized
     fun pendingCount(): Int = readableDatabase.rawQuery(
-        "SELECT COUNT(*) FROM telemetry WHERE sync_state = 'pending'",
+        "SELECT COUNT(*) FROM telemetry WHERE sync_state IN ('queued', 'failed')",
         null,
     ).use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else 0 }
 
     @Synchronized
     fun upsertEvent(event: PendingEvent) {
+        val existing = eventSyncState(event.id)
         val values = ContentValues().apply {
             put("id", event.id)
             put("started_at", event.startedAtEpochMillis)
@@ -153,6 +316,9 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
             put("rules_version", event.rulesVersion)
             event.userResponse?.let { put("user_response", it.name) }
             event.sosStatus?.let { put("sos_status", it) }
+            put("sync_state", existing?.first ?: SyncState.QUEUED.name)
+            put("attempts", existing?.second ?: 0)
+            put("next_attempt_at", existing?.third ?: 0L)
         }
         writableDatabase.insertWithOnConflict(
             "events",
@@ -160,6 +326,84 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
             values,
             SQLiteDatabase.CONFLICT_REPLACE,
         )
+    }
+
+    @Synchronized
+    private fun eventSyncState(eventId: String): Triple<String, Int, Long>? =
+        readableDatabase.query(
+            "events",
+            arrayOf("sync_state", "attempts", "next_attempt_at"),
+            "id = ?",
+            arrayOf(eventId),
+            null,
+            null,
+            null,
+        ).use { cursor ->
+            if (cursor.moveToFirst()) {
+                Triple(cursor.getString(0), cursor.getInt(1), cursor.getLong(2))
+            } else {
+                null
+            }
+        }
+
+    @Synchronized
+    fun pendingEvents(now: Long): List<PendingEvent> = readableDatabase.query(
+        "events",
+        arrayOf(
+            "id", "started_at", "ended_at", "state", "trigger_score",
+            "rules_version", "user_response", "sos_status", "attempts", "next_attempt_at",
+        ),
+        "sync_state IN (?, ?) AND next_attempt_at <= ?",
+        arrayOf(SyncState.QUEUED.name, SyncState.FAILED.name, now.toString()),
+        null,
+        null,
+        "started_at ASC",
+    ).use { cursor ->
+        val rows = mutableListOf<PendingEvent>()
+        while (cursor.moveToNext()) {
+            rows += PendingEvent(
+                id = cursor.getString(0),
+                startedAtEpochMillis = cursor.getLong(1),
+                endedAtEpochMillis = cursor.getLong(2).takeIf { !cursor.isNull(2) },
+                state = MonitoringState.valueOf(cursor.getString(3)),
+                triggerScore = cursor.getDouble(4),
+                rulesVersion = cursor.getString(5),
+                userResponse = cursor.getString(6)?.let { UserResponse.valueOf(it) },
+                sosStatus = cursor.getString(7),
+                attempts = cursor.getInt(8),
+                nextAttemptAt = cursor.getLong(9),
+            )
+        }
+        rows
+    }
+
+    @Synchronized
+    fun markEventSent(eventId: String, attempts: Int, nextAttemptAt: Long) {
+        val values = ContentValues().apply {
+            put("sync_state", SyncState.SENT.name)
+            put("attempts", attempts)
+            put("next_attempt_at", nextAttemptAt)
+        }
+        writableDatabase.update("events", values, "id = ?", arrayOf(eventId))
+    }
+
+    @Synchronized
+    fun markEventConfirmed(eventId: String) {
+        val values = ContentValues().apply {
+            put("sync_state", SyncState.CONFIRMED.name)
+            put("remote_ack", 1)
+        }
+        writableDatabase.update("events", values, "id = ?", arrayOf(eventId))
+    }
+
+    @Synchronized
+    fun markEventFailed(eventId: String, attempts: Int, nextAttemptAt: Long) {
+        val values = ContentValues().apply {
+            put("sync_state", SyncState.FAILED.name)
+            put("attempts", attempts)
+            put("next_attempt_at", nextAttemptAt)
+        }
+        writableDatabase.update("events", values, "id = ?", arrayOf(eventId))
     }
 
     @Synchronized
@@ -226,7 +470,7 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
     private fun trimTelemetry() {
         writableDatabase.delete(
             "telemetry",
-            "sync_state = 'synced' AND captured_at < ?",
+            "sync_state = 'confirmed' AND captured_at < ?",
             arrayOf((System.currentTimeMillis() - SEVEN_DAYS_MILLIS).toString()),
         )
         writableDatabase.execSQL(
@@ -234,7 +478,7 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
             DELETE FROM telemetry
             WHERE id IN (
                 SELECT id FROM telemetry
-                WHERE sync_state = 'synced'
+                WHERE sync_state = 'confirmed'
                 ORDER BY captured_at ASC
                 LIMIT MAX(0, (SELECT COUNT(*) FROM telemetry) - $MAX_ROWS)
             )
@@ -244,7 +488,7 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DATABASE_NAME = "anxietywatch-wear.db"
-        private const val DATABASE_VERSION = 1
+        private const val DATABASE_VERSION = 2
         private const val BASELINE_NAME = "heart-rate-v1"
         private const val MAX_ROWS = 10_000
         private const val SEVEN_DAYS_MILLIS = 7L * 24 * 60 * 60 * 1000

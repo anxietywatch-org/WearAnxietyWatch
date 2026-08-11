@@ -167,4 +167,6 @@ data class PendingEvent(
     val userResponse: UserResponse? = null,
     val sosStatus: String? = null,
     val endedAtEpochMillis: Long? = null,
+    val attempts: Int = 0,
+    val nextAttemptAt: Long = 0L,
 )

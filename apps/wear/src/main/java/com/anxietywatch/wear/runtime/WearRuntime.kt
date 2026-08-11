@@ -5,8 +5,8 @@ import android.os.BatteryManager
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import com.anxietywatch.wear.datalayer.OutboxSyncer
 import com.anxietywatch.wear.datalayer.PhoneConnectionObserver
-import com.anxietywatch.wear.datalayer.WatchDataClient
 import com.anxietywatch.wear.domain.BaselineSnapshot
 import com.anxietywatch.wear.domain.CapabilityStatus
 import com.anxietywatch.wear.domain.MonitoringState
@@ -57,7 +57,7 @@ class WearRuntime(context: Context) {
     private val motionProvider = AndroidMotionSensorProvider(appContext)
     private val samsungProvider = SamsungSensorProvider(appContext)
     private val connectionObserver = PhoneConnectionObserver(appContext)
-    private val dataClient = WatchDataClient(appContext, database, connectionObserver)
+    private val outbox = OutboxSyncer(appContext, database, connectionObserver, scope)
     private val notifier = AlertNotifier(appContext)
     val haptics = HapticBreathingEngine(appContext)
 
@@ -72,6 +72,7 @@ class WearRuntime(context: Context) {
 
     init {
         refreshStaticState()
+        outbox.start()
         if (PermissionPolicy.hasForegroundHeartRate(appContext)) {
             enqueuePassiveRegistration()
         }
@@ -147,6 +148,14 @@ class WearRuntime(context: Context) {
 
     fun setPhysicalActivity(active: Boolean) {
         mutableState.value = mutableState.value.copy(physicalActivity = active)
+    }
+
+    /**
+     * Confirma la entrega de un lote de telemetría y/o un evento (SOS) que el teléfono
+     * notificó por ACK por identificador (`/fog/v1/ack/...`).
+     */
+    fun handleAck(batchId: String? = null, eventId: String? = null, sosCancelEventId: String? = null) {
+        outbox.handleAck(batchId, eventId, sosCancelEventId)
     }
 
     fun navigate(screen: WearScreen) {
@@ -248,10 +257,12 @@ class WearRuntime(context: Context) {
         )
         haptics.confirmation()
         scope.launch {
-            val sent = dataClient.sendImmediateEvent(activeEvent ?: return@launch)
-            val status = if (sent) "Enviado al teléfono" else "Pendiente: teléfono no conectado"
-            activeEvent = activeEvent?.copy(sosStatus = if (sent) "sent_to_phone" else "queued_on_watch")
-            activeEvent?.let(database::upsertEvent)
+            outbox.dispatchEventNow(activeEvent ?: return@launch)
+            val status = if (connectionObserver.isConnected()) {
+                "Enviado al teléfono"
+            } else {
+                "Pendiente: teléfono no conectado"
+            }
             mutableState.value = mutableState.value.copy(sosMessage = status)
         }
     }
@@ -435,7 +446,7 @@ class WearRuntime(context: Context) {
                 val batteryManager = appContext.getSystemService(BatteryManager::class.java)
                 val battery = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
                     .coerceIn(0, 100)
-                if (connected) dataClient.syncPendingBatch()
+                if (connected) outbox.requestSync()
                 mutableState.value = mutableState.value.copy(
                     phoneConnected = connected,
                     batteryPercent = battery,
