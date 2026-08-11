@@ -117,3 +117,43 @@ test('POST /api/v1/sos/trigger validates and deduplicates events', async () => {
     );
   }
 });
+
+test('POST /api/v1/sos/cancel validates and deduplicates events', async () => {
+  const server = app.listen(0);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address() as AddressInfo;
+  const cancel = {
+    eventId: '550e8400-e29b-41d4-a716-446655440021',
+    userId: '550e8400-e29b-41d4-a716-446655440012',
+    deviceId: '550e8400-e29b-41d4-a716-446655440011',
+    cancelledAt: '2026-08-01T13:03:00Z',
+    reason: 'Usuario canceló la alerta',
+  };
+
+  try {
+    const first = await fetch(
+      `http://127.0.0.1:${address.port}/api/v1/sos/cancel`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(cancel),
+      },
+    );
+    const second = await fetch(
+      `http://127.0.0.1:${address.port}/api/v1/sos/cancel`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(cancel),
+      },
+    );
+
+    assert.equal(first.status, 202);
+    assert.equal(second.status, 200);
+    assert.equal((await second.json()).duplicate, true);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});

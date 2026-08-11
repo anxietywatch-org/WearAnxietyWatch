@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   StatusBar,
   StyleSheet,
@@ -6,32 +6,79 @@ import {
   useColorScheme,
   View,
 } from 'react-native';
+import { fogNode } from './src/fog/fogNode';
+import type { FogNodeState } from './src/fog/fogNode';
+import { BASE_URL } from './src/fog/fogNode';
 
 function App() {
   const isDarkMode = useColorScheme() === 'dark';
+  const [state, setState] = useState<FogNodeState | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    const unsubscribe = fogNode.subscribe(next => {
+      if (mounted) setState(next);
+    });
+    void fogNode.start();
+    return () => {
+      mounted = false;
+      unsubscribe();
+      fogNode.stop();
+    };
+  }, []);
+
+  const statusLabel = state?.unauthorized
+    ? 'Reautenticación requerida'
+    : state?.token
+    ? 'Conectado'
+    : 'Sin credenciales';
 
   return (
     <>
       <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
       <View style={styles.screen}>
         <View style={styles.badge}>
-          <Text style={styles.badgeText}>BASE LOCAL</Text>
+          <Text style={styles.badgeText}>NODO FOG</Text>
         </View>
         <Text style={styles.title}>AnxietyWatch</Text>
-        <Text style={styles.subtitle}>Coordinador móvil preparado</Text>
+        <Text style={styles.subtitle}>Puente reloj → backend</Text>
 
         <View style={styles.card}>
-          <Text style={styles.cardLabel}>Reloj</Text>
-          <Text style={styles.cardValue}>Pendiente de vinculación</Text>
+          <Text style={styles.cardLabel}>API</Text>
+          <Text style={styles.cardValue}>{BASE_URL}</Text>
         </View>
         <View style={styles.card}>
-          <Text style={styles.cardLabel}>Sincronización</Text>
-          <Text style={styles.cardValue}>Modo offline disponible</Text>
+          <Text style={styles.cardLabel}>Estado</Text>
+          <Text style={styles.cardValue}>{statusLabel}</Text>
+        </View>
+        <View style={styles.card}>
+          <Text style={styles.cardLabel}>Usuario</Text>
+          <Text style={styles.cardValue}>
+            {state?.identity.userId || 'Sin vincular'}
+          </Text>
+        </View>
+        <View style={styles.card}>
+          <Text style={styles.cardLabel}>Dispositivo</Text>
+          <Text style={styles.cardValue}>
+            {state?.identity.deviceId || 'Sin asignar'}
+          </Text>
+        </View>
+        <View style={styles.card}>
+          <Text style={styles.cardLabel}>Sobres pendientes del reloj</Text>
+          <Text style={styles.cardValue}>{state?.pending ?? '…'}</Text>
+        </View>
+        <View style={styles.card}>
+          <Text style={styles.cardLabel}>Última entrega</Text>
+          <Text style={styles.cardValue}>
+            {state?.lastDelivery
+              ? `${state.lastDelivery.kind}: ${state.lastDelivery.status}`
+              : 'Sin entregas'}
+          </Text>
         </View>
 
         <Text style={styles.notice}>
-          Herramienta de bienestar y apoyo. Esta información no representa un
-          diagnóstico médico.
+          El reloj entrega telemetría y eventos SOS por Wear Data Layer; este
+          nodo los enriquece y envía al API de producción.
         </Text>
       </View>
     </>
@@ -85,7 +132,7 @@ const styles = StyleSheet.create({
   },
   cardValue: {
     color: '#E6F0EC',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '600',
     marginTop: 6,
   },
