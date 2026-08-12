@@ -106,6 +106,71 @@ class WearDatabaseTest {
         assertTrue(db.pendingBatches(now = Long.MAX_VALUE).none { it.batchId == "batch-1" })
     }
 
+@Test
+    fun `sent sos event is requeued when cancelled so the cancel reaches the phone`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.SOS_ACTIVE,
+            triggerScore = 0.9,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertEvent(event)
+        db.markEventSent(event.id, attempts = 1, nextAttemptAt = Long.MAX_VALUE)
+        assertTrue(db.pendingEvents(now = Long.MAX_VALUE).none { it.id == event.id })
+
+        val cancelled = event.copy(
+            state = MonitoringState.RESOLVED,
+            userResponse = com.anxietywatch.wear.domain.UserResponse.SOS_CANCELLED,
+            endedAtEpochMillis = 2_000L,
+        )
+        db.upsertEvent(cancelled)
+
+        val pending = db.pendingEvents(now = Long.MAX_VALUE).first { it.id == event.id }
+        assertEquals(
+            com.anxietywatch.wear.domain.UserResponse.SOS_CANCELLED,
+            pending.userResponse,
+        )
+        assertEquals(2_000L, pending.endedAtEpochMillis)
+    }
+
+    @Test
+    fun `migration v3 normalizes lowercase sync states to enum names`() {
+        // 1. Crear el esquema actual (v3) con el código de la app.
+        val seed = WearDatabase(ApplicationProvider.getApplicationContext<Context>())
+        seed.writableDatabase
+        seed.close()
+
+        // 2. Plantar valores de la versión 2 (estados en minúsculas) y
+        //    retroceder PRAGMA user_version para forzar onUpgrade(2, 3).
+        val path = ApplicationProvider
+            .getApplicationContext<Context>()
+            .getDatabasePath("anxietywatch-wear.db")
+        android.database.sqlite.SQLiteDatabase.openDatabase(
+            path.path,
+            null,
+            android.database.sqlite.SQLiteDatabase.OPEN_READWRITE,
+        ).use { raw ->
+            raw.execSQL("PRAGMA user_version = 2")
+            raw.execSQL("INSERT INTO telemetry (id, captured_at, type, payload, sync_state) VALUES ('m1', 1000, 'heart_rate', '{}', 'pending')")
+            raw.execSQL("INSERT INTO telemetry (id, captured_at, type, payload, sync_state) VALUES ('m2', 2000, 'motion', '{}', 'synced')")
+            raw.execSQL("UPDATE sync_batches SET state = 'sent'")
+            raw.execSQL("UPDATE events SET sync_state = 'queued'")
+        }
+
+        // 3. Reabrir: la migración v3 debe normalizar a mayúsculas.
+        val reopened = WearDatabase(ApplicationProvider.getApplicationContext<Context>())
+        val pending = reopened.pendingTelemetry(10)
+        assertEquals(1, pending.size)
+        assertEquals("m1", pending.first().id)
+        val confirmedCount = reopened.readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM telemetry WHERE sync_state = ?",
+            arrayOf(SyncState.CONFIRMED.name),
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else -1 }
+        assertEquals(1, confirmedCount)
+        reopened.close()
+        db = WearDatabase(ApplicationProvider.getApplicationContext<Context>())
+    }
+
     private fun heartRate() = SensorReading.HeartRate(
         bpm = 80.0,
         ibiMillis = listOf(750.0, 745.0),

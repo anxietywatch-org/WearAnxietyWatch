@@ -273,7 +273,12 @@ class WearRuntime(context: Context) {
             userResponse = UserResponse.SOS_CANCELLED,
             sosStatus = "cancelled",
             endedAtEpochMillis = System.currentTimeMillis(),
-        ).also { it?.let(database::upsertEvent) }
+        ).also {
+            it?.let { event ->
+                database.upsertEvent(event)
+                outbox.requestSync()
+            }
+        }
         stateMachine.onUserResponse(UserResponse.SOS_CANCELLED)
         mutableState.value = mutableState.value.copy(
             screen = WearScreen.FINISHED,
@@ -389,7 +394,12 @@ class WearRuntime(context: Context) {
             } else {
                 null
             },
-        ).also { it?.let(database::upsertEvent) }
+        ).also {
+            it?.let { event ->
+                database.upsertEvent(event)
+                if (response == UserResponse.SOS_CANCELLED) outbox.requestSync()
+            }
+        }
     }
 
     private fun restartMonitoring() {
