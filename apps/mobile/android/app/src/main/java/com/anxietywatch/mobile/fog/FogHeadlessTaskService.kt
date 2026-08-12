@@ -2,6 +2,7 @@ package com.anxietywatch.mobile.fog
 
 import android.content.Context
 import android.content.Intent
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.HeadlessJsTaskService
 import com.facebook.react.jstasks.HeadlessJsTaskConfig
 
@@ -12,7 +13,7 @@ import com.facebook.react.jstasks.HeadlessJsTaskConfig
  */
 class FogHeadlessTaskService : HeadlessJsTaskService() {
     override fun getTaskConfig(intent: Intent?): HeadlessJsTaskConfig =
-        HeadlessJsTaskConfig(TASK_NAME, null, 30_000L, true)
+        HeadlessJsTaskConfig(TASK_NAME, Arguments.createMap(), 30_000L, true)
 
     companion object {
         const val TASK_NAME = "AnxietyWatchFogSync"
