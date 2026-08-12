@@ -42,15 +42,15 @@ class WearFogListenerService : WearableListenerService() {
         val raw = String(messageEvent.data, Charsets.UTF_8)
         when {
             path.startsWith(SOS_CANCEL_PREFIX) -> {
-                val eventId = path.destructure(SOS_CANCEL_PREFIX)
+                val eventId = path.destructure(SOS_CANCEL_PREFIX) ?: return
                 FogBridge.enqueueInbound(this, SOS_CANCEL_KIND, eventId, raw)
             }
             path.startsWith(SOS_PREFIX) -> {
-                val eventId = path.destructure(SOS_PREFIX)
+                val eventId = path.destructure(SOS_PREFIX) ?: return
                 FogBridge.enqueueInbound(this, SOS_KIND, eventId, raw)
             }
             path.startsWith(SUSPECTED_PREFIX) -> {
-                val eventId = path.destructure(SUSPECTED_PREFIX)
+                val eventId = path.destructure(SUSPECTED_PREFIX) ?: return
                 FogBridge.enqueueInbound(this, SUSPECTED_KIND, eventId, raw)
             }
             path == CAPABILITIES_ENDPOINT -> {
@@ -59,8 +59,17 @@ class WearFogListenerService : WearableListenerService() {
         }
     }
 
-    private fun String.destructure(prefix: String): String =
-        if (startsWith(prefix)) substring(prefix.length).removePrefix("/") else ""
+    /**
+     * Extrae el identificador que sigue al prefijo, o null si la ruta no
+     * matchea el prefijo o el identificador queda vacío. Así, DataItems de
+     * otras rutas (p. ej. el anuncio de capabilities del reloj en
+     * `/fog/v1/capabilities`) no se encolan como telemetría.
+     */
+    private fun String.destructure(prefix: String): String? {
+        if (!startsWith(prefix)) return null
+        val id = substring(prefix.length).removePrefix("/")
+        return id.takeIf { it.isNotEmpty() }
+    }
 
     companion object {
         const val FOG_PHONE_PROTOCOL = "fog_phone_v1"

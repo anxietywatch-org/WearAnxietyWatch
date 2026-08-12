@@ -18,12 +18,13 @@ La detección nunca importa directamente el SDK de Samsung. `SamsungSensorProvid
 
 ## Comunicación
 
-- `MessageClient`: eventos inmediatos y respuestas.
-- `DataClient`: estados y lotes pequeños sincronizables.
-- HTTPS: teléfono a API.
-- PostgreSQL: persistencia central.
+- `MessageClient`: eventos inmediatos y respuestas (SOS y su cancelación).
+- `DataClient`: telemetría en lotes y el anuncio de capabilities del reloj.
+- HTTPS: teléfono (nodo fog) a API, únicamente.
+- SQLite (`node:sqlite`): persistencia central del API en esta fase (migración a MongoDB Atlas detrás de las mismas interfaces de repositorio).
+- Room/SQLite: cola de salida del nodo fog en el teléfono.
 
-El canal principal reloj-teléfono será Wearable Data Layer, no BLE directo.
+El canal principal reloj-teléfono es Wearable Data Layer, no BLE directo. El reloj no realiza HTTP: entrega sobres en `/fog/v1/*` (protocolo `fog_watch_v1`) y el teléfono los enriquece (`fog_phone_v1`) antes de llamar al API. Las confirmaciones vuelven al reloj por identificador (`/fog/v1/ack/...`).
 
 ## Offline first
 

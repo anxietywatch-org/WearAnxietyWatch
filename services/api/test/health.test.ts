@@ -213,3 +213,80 @@ test('POST /api/v1/telemetry/batch with invalid token returns 403', async () => 
     );
   }
 });
+
+test('POST /api/v1/telemetry/batch with malformed JSON returns 400', async () => {
+  const server = app.listen(0);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address() as AddressInfo;
+
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/api/v1/telemetry/batch`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'Bearer test-token-1',
+        },
+        body: '{not json',
+      },
+    );
+
+    assert.equal(response.status, 400);
+    const body = (await response.json()) as Record<string, unknown>;
+    assert.equal(body.error, 'invalid_json');
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
+test('POST /api/v1/telemetry/batch with invalid body returns 400', async () => {
+  const server = app.listen(0);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address() as AddressInfo;
+
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/api/v1/telemetry/batch`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'Bearer test-token-1',
+        },
+        body: JSON.stringify({ batchId: 'missing-fields' }),
+      },
+    );
+
+    assert.equal(response.status, 400);
+    const body = (await response.json()) as Record<string, unknown>;
+    assert.equal(body.error, 'invalid_request');
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
+test('GET unknown route returns 404', async () => {
+  const server = app.listen(0);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address() as AddressInfo;
+
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/api/v1/telemetry/nope`,
+      {
+        headers: { authorization: 'Bearer test-token-1' },
+      },
+    );
+
+    assert.equal(response.status, 404);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});

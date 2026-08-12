@@ -147,6 +147,25 @@ const errorHandler: ErrorRequestHandler = (
   response,
   _next,
 ) => {
+  // Errores del body parser (express.json): respetar su semántica HTTP.
+  if (error instanceof SyntaxError && 'status' in error) {
+    const status = (error as SyntaxError & { status: number }).status;
+    if (status === 400) {
+      response.status(400).json({
+        error: 'invalid_json',
+        message: 'El cuerpo de la solicitud no es JSON válido.',
+      });
+      return;
+    }
+  }
+  const status = (error as Error & { status?: number; type?: string }).status;
+  if (status === 413 || (error as { type?: string }).type === 'entity.too.large') {
+    response.status(413).json({
+      error: 'payload_too_large',
+      message: 'El cuerpo de la solicitud excede el límite permitido.',
+    });
+    return;
+  }
   const message = error instanceof Error ? error.message : 'Unknown error';
   console.error(JSON.stringify({ level: 'error', message }));
   response.status(500).json({

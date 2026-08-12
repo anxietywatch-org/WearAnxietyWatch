@@ -320,6 +320,10 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
     @Synchronized
     fun upsertEvent(event: PendingEvent) {
         val existing = eventSyncState(event.id)
+        // Una cancelación debe salir siempre, aunque el evento SOS ya esté
+        // SENT/CONFIRMED: se re-encola a QUEUED para que la cancelación llegue
+        // al teléfono. Sin esto, pendingEvents() (QUEUED/FAILED) nunca la vería.
+        val cancelled = event.userResponse == UserResponse.SOS_CANCELLED
         val values = ContentValues().apply {
             put("id", event.id)
             put("started_at", event.startedAtEpochMillis)
@@ -329,9 +333,15 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
             put("rules_version", event.rulesVersion)
             event.userResponse?.let { put("user_response", it.name) }
             event.sosStatus?.let { put("sos_status", it) }
-            put("sync_state", existing?.first ?: SyncState.QUEUED.name)
-            put("attempts", existing?.second ?: 0)
-            put("next_attempt_at", existing?.third ?: 0L)
+            if (cancelled) {
+                put("sync_state", SyncState.QUEUED.name)
+                put("attempts", 0)
+                put("next_attempt_at", 0L)
+            } else {
+                put("sync_state", existing?.first ?: SyncState.QUEUED.name)
+                put("attempts", existing?.second ?: 0)
+                put("next_attempt_at", existing?.third ?: 0L)
+            }
         }
         writableDatabase.insertWithOnConflict(
             "events",

@@ -8,6 +8,7 @@ export type FogKind =
 export interface FogEntry {
   kind: FogKind;
   key: string;
+  entityId: string;
   envelope: string;
   receivedAt: number;
 }
@@ -46,6 +47,7 @@ export interface WearSosEnvelope {
 
 export interface WearSosCancelEnvelope extends WearSosEnvelope {
   cancelled: true;
+  cancelledAt?: string;
 }
 
 export type SignalQuality = 'good' | 'fair' | 'poor' | 'unknown';

@@ -66,7 +66,7 @@ describe('parseEnvelope', () => {
 });
 
 describe('enrichTelemetry', () => {
-  test('maps heart-rate records to the public DTO', () => {
+  test('maps watch records (lowercase types) to the public DTO', () => {
     const payload = enrichTelemetry(
       {
         schemaVersion: 'wear-telemetry-records-v2',
@@ -80,7 +80,7 @@ describe('enrichTelemetry', () => {
           {
             id: 'r1',
             capturedAt: '2026-08-10T21:00:30Z',
-            type: 'HEART_RATE',
+            type: 'heart_rate',
             payload: {
               bpm: 82.5,
               ibiMillis: [755, 760, 748],
@@ -90,8 +90,14 @@ describe('enrichTelemetry', () => {
           {
             id: 'r2',
             capturedAt: '2026-08-10T21:01:00Z',
-            type: 'ACCELEROMETER',
+            type: 'motion',
             payload: { magnitudeG: 1.1, variance: 0.05 },
+          },
+          {
+            id: 'r3',
+            capturedAt: '2026-08-10T21:02:00Z',
+            type: 'skin_temperature',
+            payload: { celsius: 31.4 },
           },
         ],
       },
@@ -104,11 +110,12 @@ describe('enrichTelemetry', () => {
     expect(payload!.deviceId).toBe('device-1');
     expect(payload!.sessionId).toBe('session-1');
     expect(payload!.sequence).toBe(7);
-    expect(payload!.samples).toHaveLength(2);
+    expect(payload!.samples).toHaveLength(3);
     expect(payload!.samples[0].heartRateBpm).toBe(82.5);
     expect(payload!.samples[0].ibiMs).toEqual([755, 760, 748]);
     expect(payload!.samples[0].quality.heartRate).toBe('good');
     expect(payload!.samples[1].heartRateBpm).toBeNull();
+    expect(payload!.samples[2].skinTemperatureCelsius).toBe(31.4);
   });
 
   test('returns null when no samples can be mapped', () => {
@@ -127,6 +134,18 @@ describe('enrichTelemetry', () => {
             capturedAt: '2026-08-10T21:00:30Z',
             type: 'UNKNOWN',
             payload: null,
+          },
+          {
+            id: 'r2',
+            capturedAt: '2026-08-10T21:01:00Z',
+            type: 'steps',
+            payload: { count: 42 },
+          },
+          {
+            id: 'r3',
+            capturedAt: '2026-08-10T21:02:00Z',
+            type: 'availability',
+            payload: { state: 'off_body' },
           },
         ],
       },

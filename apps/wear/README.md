@@ -72,5 +72,6 @@ Hasta completar esos pasos, IBI, PPG y temperatura aparecen como no disponibles.
 
 - La lectura física de IBI, PPG y temperatura requiere el AAR propietario y el alta de socio Samsung.
 - El emulador no reproduce Samsung Health Sensor SDK; usa el proveedor simulado o los datos sintéticos de Health Services.
-- Data Layer exige que reloj y teléfono usen el mismo package name y firma. No se modificó la aplicación móvil en esta entrega.
+- Data Layer requiere que reloj y teléfono compartan la misma firma de depuración (no el mismo package name). La app móvil (`com.anxietywatch.mobile`) actúa de nodo fog.
+- El nodo fog móvil depende del runtime de React Native: con la app cerrada, el reloj acumula sobres en su SQLite local hasta que la app se abra.
 - Los umbrales son configuración experimental de bienestar, no valores clínicos universales.

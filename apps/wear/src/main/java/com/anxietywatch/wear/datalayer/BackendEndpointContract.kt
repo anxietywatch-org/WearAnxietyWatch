@@ -80,17 +80,21 @@ object BackendEndpointContract {
         .put("rulesVersion", event.rulesVersion)
         .put("mobileEnrichmentRequired", JSONArray(listOf("userId", "deviceId")))
 
-    fun sosCancelEnvelope(event: PendingEvent): JSONObject = JSONObject()
-        .put("schemaVersion", SOS_SCHEMA)
-        .put("targetEndpoint", SOS_CANCEL_ENDPOINT)
-        .put("transport", "WEAR_DATA_LAYER")
-        .put("eventId", event.id)
-        .put("triggeredAt", Instant.ofEpochMilli(event.startedAtEpochMillis).toString())
-        .put("source", "WATCH")
-        .put("reason", "SOS cancelado por el usuario en el reloj")
-        .put("state", event.state.name)
-        .put("cancelled", true)
-        .put("mobileEnrichmentRequired", JSONArray(listOf("userId", "deviceId")))
+    fun sosCancelEnvelope(event: PendingEvent): JSONObject {
+        val cancelledAtMillis = event.endedAtEpochMillis ?: event.startedAtEpochMillis
+        return JSONObject()
+            .put("schemaVersion", SOS_SCHEMA)
+            .put("targetEndpoint", SOS_CANCEL_ENDPOINT)
+            .put("transport", "WEAR_DATA_LAYER")
+            .put("eventId", event.id)
+            .put("triggeredAt", Instant.ofEpochMilli(event.startedAtEpochMillis).toString())
+            .put("cancelledAt", Instant.ofEpochMilli(cancelledAtMillis).toString())
+            .put("source", "WATCH")
+            .put("reason", "SOS cancelado por el usuario en el reloj")
+            .put("state", event.state.name)
+            .put("cancelled", true)
+            .put("mobileEnrichmentRequired", JSONArray(listOf("userId", "deviceId")))
+    }
 
     fun capabilitiesEnvelope(deviceModel: String, wearOsVersion: String): JSONObject = JSONObject()
         .put("schemaVersion", "fog-capabilities-v1")

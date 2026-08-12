@@ -52,6 +52,20 @@ paths:
         '202': { description: Evento aceptado }
         '200': { description: Evento duplicado }
         '400': { description: Payload invalido }
+  /api/v1/sos/cancel:
+    post:
+      operationId: postSosCancel
+      summary: Cancela una alerta SOS activa, idempotente
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SosCancel'
+      responses:
+        '202': { description: Cancelacion aceptada }
+        '200': { description: Cancelacion duplicada }
+        '400': { description: Payload invalido }
 components:
   schemas:
     TelemetryBatch:
@@ -92,6 +106,16 @@ components:
         deviceId: { type: string, format: uuid }
         triggeredAt: { type: string, format: date-time }
         source: { type: string, enum: [WATCH, MOBILE] }
+        reason: { type: [string, 'null'], maxLength: 500 }
+    SosCancel:
+      type: object
+      additionalProperties: false
+      required: [eventId, userId, deviceId, cancelledAt]
+      properties:
+        eventId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        deviceId: { type: string, format: uuid }
+        cancelledAt: { type: string, format: date-time }
         reason: { type: [string, 'null'], maxLength: 500 }
     HealthStatus:
       type: object

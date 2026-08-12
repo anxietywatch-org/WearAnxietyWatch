@@ -13,6 +13,7 @@ jest.mock('react-native', () => {
     announceFogPhone: jest.fn().mockResolvedValue(true),
     markCloudAcked: jest.fn().mockResolvedValue(true),
     markWatchAcked: jest.fn().mockResolvedValue(true),
+    markFailed: jest.fn().mockResolvedValue(true),
     complete: jest.fn().mockResolvedValue(true),
     ackTelemetry: jest.fn().mockResolvedValue(true),
     ackSos: jest.fn().mockResolvedValue(true),
@@ -34,10 +35,16 @@ const WearFog = NativeModules.WearFog as {
 };
 
 function entry(kind: FogKind | 'mystery', key = `${kind}:${kind}-id-1`): FogEntry {
-  return { kind: kind as FogKind, key, envelope: '{}', receivedAt: 1 };
+  return {
+    kind: kind as FogKind,
+    key,
+    entityId: key.substring(key.indexOf(':') + 1),
+    envelope: '{}',
+    receivedAt: 1,
+  };
 }
 
-function mockDeliver(status: 'accepted' | 'duplicate' | 'unauthorized' | 'retry') {
+function mockDeliver(status: 'accepted' | 'duplicate' | 'unauthorized' | 'retry' | 'failed') {
   (deliverEntry as jest.Mock).mockResolvedValue({ status });
 }
 
@@ -64,7 +71,7 @@ beforeEach(async () => {
 });
 
 describe('fogNode flush', () => {
-  it('ACK OK: marca cloud -> confirma al reloj -> marca watch -> completa', async () => {
+  it('ACK OK: marca cloud -> confirma al reloj por entityId pelado -> marca watch -> completa', async () => {
     WearFog.peek.mockResolvedValue(JSON.stringify([entry('telemetry')]));
     mockDeliver('accepted');
 
@@ -83,13 +90,13 @@ describe('fogNode flush', () => {
     }
     expect(order).toEqual([
       'markCloudAcked:telemetry:telemetry-id-1',
-      'ackTelemetry:telemetry:telemetry-id-1',
+      'ackTelemetry:telemetry-id-1',
       'markWatchAcked:telemetry:telemetry-id-1',
       'complete:telemetry:telemetry-id-1',
     ]);
   });
 
-  it('ACK falla: no completa ni marca watch, el sobre queda pendiente', async () => {
+  it('ACK falla: no completa ni marca watch, marca FAILED para reintento', async () => {
     WearFog.peek.mockResolvedValue(JSON.stringify([entry('telemetry')]));
     WearFog.ackTelemetry.mockResolvedValue(false);
     mockDeliver('accepted');
@@ -100,6 +107,7 @@ describe('fogNode flush', () => {
     expect(WearFog.ackTelemetry).toHaveBeenCalledTimes(1);
     expect(WearFog.markWatchAcked).not.toHaveBeenCalled();
     expect(WearFog.complete).not.toHaveBeenCalled();
+    expect(WearFog.markFailed).toHaveBeenCalledWith('telemetry:telemetry-id-1');
   });
 
   it('kind desconocido: se descarta sin pasar por el API', async () => {
@@ -110,6 +118,32 @@ describe('fogNode flush', () => {
     expect(deliverEntry).not.toHaveBeenCalled();
     expect(WearFog.complete).toHaveBeenCalledTimes(1);
     expect(WearFog.complete).toHaveBeenCalledWith('mystery:x');
+  });
+
+  it('status failed (veneno): marca FAILED para backoff, no borra', async () => {
+    WearFog.peek.mockResolvedValue(JSON.stringify([entry('telemetry')]));
+    mockDeliver('failed');
+
+    await flushOnce();
+
+    expect(WearFog.markFailed).toHaveBeenCalledWith('telemetry:telemetry-id-1');
+    expect(WearFog.complete).not.toHaveBeenCalled();
+    expect(WearFog.ackTelemetry).not.toHaveBeenCalled();
+  });
+
+  it('error de red: marca FAILED y no aborta el flush', async () => {
+    WearFog.peek.mockResolvedValue(
+      JSON.stringify([entry('telemetry', 'telemetry:a'), entry('sos', 'sos:b')]),
+    );
+    (deliverEntry as jest.Mock)
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValueOnce({ status: 'accepted' });
+
+    await flushOnce();
+
+    expect(WearFog.markFailed).toHaveBeenCalledWith('telemetry:a');
+    expect(WearFog.markFailed).not.toHaveBeenCalledWith('sos:b');
+    expect(WearFog.ackSos).toHaveBeenCalledWith('b');
   });
 
   it('no autorizado: marca estado y no confirma al reloj', async () => {
