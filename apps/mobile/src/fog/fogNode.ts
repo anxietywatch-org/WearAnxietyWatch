@@ -1,4 +1,8 @@
-import { NativeEventEmitter, NativeModules } from 'react-native';
+import {
+  NativeEventEmitter,
+  NativeModules,
+  type EmitterSubscription,
+} from 'react-native';
 import type {
   AuthResult,
   DeliveryResult,
@@ -7,13 +11,10 @@ import type {
 } from './types';
 import { deliverEntry } from './api';
 import { FogEndpoints } from './enricher';
+import { clearPersistedAuth, persistAuth, restoreAuth } from './auth';
 
 const { WearFog } = NativeModules;
 const events = new NativeEventEmitter(WearFog);
-
-type EmitterWithRemove = NativeEventEmitter & {
-  removeListener: (eventName: string, listener: () => void) => void;
-};
 
 function uuid(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
@@ -58,33 +59,36 @@ class FogNode {
   private token = '';
   private listeners = new Set<FogStateListener>();
   private busy = false;
+  private started = false;
   private timer: ReturnType<typeof setInterval> | null = null;
-  private inboundListener: (() => void) | null = null;
+  private inboundSubscription: EmitterSubscription | null = null;
   private pending = 0;
   private lastDelivery: DeliveryResult | null = null;
   private unauthorized = false;
 
   async start(): Promise<void> {
+    if (this.started) return;
+    this.started = true;
     await this.loadIdentity();
+    const auth = await restoreAuth();
+    if (auth) await this.applyAuthentication(auth);
     await WearFog.announceFogPhone();
-    this.inboundListener = () => {
+    this.inboundSubscription = events.addListener('FogInbound', () => {
       void this.flush();
-    };
-    events.addListener('FogInbound', this.inboundListener);
+    });
     this.timer = setInterval(() => void this.flush(), 15_000);
     await this.flush();
     this.emit();
   }
 
   stop(): void {
+    this.started = false;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
-    if (this.inboundListener) {
-      (events as EmitterWithRemove).removeListener('FogInbound', this.inboundListener);
-      this.inboundListener = null;
-    }
+    this.inboundSubscription?.remove();
+    this.inboundSubscription = null;
   }
 
   async loadIdentity(): Promise<void> {
@@ -129,11 +133,33 @@ class FogNode {
   }
 
   async setAuthenticated(auth: AuthResult): Promise<void> {
+    await persistAuth(auth);
+    await this.applyAuthentication(auth);
+    await this.flush();
+  }
+
+  private async applyAuthentication(auth: AuthResult): Promise<void> {
     this.token = auth.token;
     this.identity = { ...this.identity, userId: auth.user.id };
     this.unauthorized = false;
     await this.persistIdentity();
     this.emit();
+  }
+
+  async clearAuthentication(): Promise<void> {
+    await clearPersistedAuth();
+    this.token = '';
+    this.identity = { ...this.identity, userId: '' };
+    this.unauthorized = false;
+    await this.persistIdentity();
+    this.emit();
+  }
+
+  async runOnce(): Promise<void> {
+    await this.loadIdentity();
+    const auth = await restoreAuth();
+    if (auth) await this.applyAuthentication(auth);
+    await WearFog.announceFogPhone();
     await this.flush();
   }
 
@@ -200,7 +226,7 @@ class FogNode {
             await this.failEntry(entry);
           }
         } else if (result.status === 'unauthorized') {
-          this.setUnauthorized();
+          await this.invalidateAuthentication();
           break;
         } else {
           // failed (envelope no parseable o rechazo del API): backoff nativo.
@@ -209,7 +235,11 @@ class FogNode {
       }
     } catch (error) {
       console.error(
-        JSON.stringify({ level: 'error', message: 'fog flush failed', detail: String(error) }),
+        JSON.stringify({
+          level: 'error',
+          message: 'fog flush failed',
+          detail: String(error),
+        }),
       );
     } finally {
       this.busy = false;
@@ -241,6 +271,12 @@ class FogNode {
 
   private setUnauthorized(): void {
     this.unauthorized = true;
+  }
+
+  private async invalidateAuthentication(): Promise<void> {
+    this.token = '';
+    this.setUnauthorized();
+    await clearPersistedAuth();
   }
 
   private emit(): void {

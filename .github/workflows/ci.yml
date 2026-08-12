@@ -82,7 +82,7 @@ jobs:
           cache: gradle
       - uses: android-actions/setup-android@v3
       - run: chmod +x gradlew
-      - run: ./gradlew :apps:wear:assembleDebug
+      - run: ./gradlew :apps:wear:testDebugUnitTest :apps:wear:assembleDebug
 
   mobile-android:
     needs: changes
@@ -117,7 +117,7 @@ jobs:
             -keysize 2048 \
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
-      - run: ./apps/mobile/android/gradlew -p apps/mobile/android assembleDebug
+      - run: ./apps/mobile/android/gradlew -p apps/mobile/android testDebugUnitTest assembleDebug
 
   ml:
     needs: changes

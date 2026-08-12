@@ -4,7 +4,12 @@ jest.mock('react-native', () => {
   const RN = jest.requireActual('react-native');
   RN.NativeModules.WearFog = {
     getIdentity: jest.fn().mockResolvedValue(
-      JSON.stringify({ userId: '', deviceId: 'dev-1', sessionId: 'ses-1', sequence: 0 }),
+      JSON.stringify({
+        userId: '',
+        deviceId: 'dev-1',
+        sessionId: 'ses-1',
+        sequence: 0,
+      }),
     ),
     setIdentity: jest.fn().mockResolvedValue(true),
     nextSequence: jest.fn().mockResolvedValue(1),
@@ -18,6 +23,11 @@ jest.mock('react-native', () => {
     ackTelemetry: jest.fn().mockResolvedValue(true),
     ackSos: jest.fn().mockResolvedValue(true),
     ackSosCancel: jest.fn().mockResolvedValue(true),
+    getAuth: jest.fn().mockResolvedValue(''),
+    setAuth: jest.fn().mockResolvedValue(true),
+    clearAuth: jest.fn().mockResolvedValue(true),
+    addListener: jest.fn(),
+    removeListeners: jest.fn(),
   };
   return RN;
 });
@@ -34,7 +44,10 @@ const WearFog = NativeModules.WearFog as {
   [key: string]: jest.Mock;
 };
 
-function entry(kind: FogKind | 'mystery', key = `${kind}:${kind}-id-1`): FogEntry {
+function entry(
+  kind: FogKind | 'mystery',
+  key = `${kind}:${kind}-id-1`,
+): FogEntry {
   return {
     kind: kind as FogKind,
     key,
@@ -44,7 +57,9 @@ function entry(kind: FogKind | 'mystery', key = `${kind}:${kind}-id-1`): FogEntr
   };
 }
 
-function mockDeliver(status: 'accepted' | 'duplicate' | 'unauthorized' | 'retry' | 'failed') {
+function mockDeliver(
+  status: 'accepted' | 'duplicate' | 'unauthorized' | 'retry' | 'failed',
+) {
   (deliverEntry as jest.Mock).mockResolvedValue({ status });
 }
 
@@ -60,13 +75,20 @@ function flushOnce() {
 beforeEach(async () => {
   jest.clearAllMocks();
   WearFog.getIdentity.mockResolvedValue(
-    JSON.stringify({ userId: '', deviceId: 'dev-1', sessionId: 'ses-1', sequence: 0 }),
+    JSON.stringify({
+      userId: '',
+      deviceId: 'dev-1',
+      sessionId: 'ses-1',
+      sequence: 0,
+    }),
   );
   WearFog.nextSequence.mockResolvedValue(1);
   WearFog.peek.mockResolvedValue('[]');
   WearFog.ackTelemetry.mockResolvedValue(true);
   WearFog.ackSos.mockResolvedValue(true);
   WearFog.ackSosCancel.mockResolvedValue(true);
+  WearFog.setAuth.mockResolvedValue(true);
+  WearFog.clearAuth.mockResolvedValue(true);
   await flushOnce();
 });
 
@@ -111,7 +133,9 @@ describe('fogNode flush', () => {
   });
 
   it('kind desconocido: se descarta sin pasar por el API', async () => {
-    WearFog.peek.mockResolvedValue(JSON.stringify([entry('mystery', 'mystery:x')]));
+    WearFog.peek.mockResolvedValue(
+      JSON.stringify([entry('mystery', 'mystery:x')]),
+    );
 
     await flushOnce();
 
@@ -133,7 +157,10 @@ describe('fogNode flush', () => {
 
   it('error de red: marca FAILED y no aborta el flush', async () => {
     WearFog.peek.mockResolvedValue(
-      JSON.stringify([entry('telemetry', 'telemetry:a'), entry('sos', 'sos:b')]),
+      JSON.stringify([
+        entry('telemetry', 'telemetry:a'),
+        entry('sos', 'sos:b'),
+      ]),
     );
     (deliverEntry as jest.Mock)
       .mockRejectedValueOnce(new Error('network down'))

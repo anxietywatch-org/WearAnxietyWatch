@@ -1,6 +1,8 @@
 package com.anxietywatch.mobile.fog
 
 import android.content.Context
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -29,6 +31,19 @@ class WearFogModule(private val reactContext: ReactApplicationContext) :
 
     private val prefs by lazy {
         reactContext.getSharedPreferences("fog_identity", Context.MODE_PRIVATE)
+    }
+
+    private val securePrefs by lazy {
+        val masterKey = MasterKey.Builder(reactContext)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
+        EncryptedSharedPreferences.create(
+            reactContext,
+            "fog_secure_session",
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+        )
     }
 
     override fun getName(): String = "WearFog"
@@ -109,6 +124,30 @@ class WearFogModule(private val reactContext: ReactApplicationContext) :
         prefs.edit().putLong("sequence", next).apply()
         promise.resolve(next.toDouble())
     }
+
+    @ReactMethod
+    fun getAuth(promise: Promise) {
+        promise.resolve(securePrefs.getString("auth", ""))
+    }
+
+    @ReactMethod
+    fun setAuth(authJson: String, promise: Promise) {
+        securePrefs.edit().putString("auth", authJson).apply()
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    fun clearAuth(promise: Promise) {
+        securePrefs.edit().remove("auth").apply()
+        promise.resolve(true)
+    }
+
+    // Requeridos por NativeEventEmitter para contabilizar suscripciones.
+    @ReactMethod
+    fun addListener(eventName: String) = Unit
+
+    @ReactMethod
+    fun removeListeners(count: Int) = Unit
 
     @ReactMethod
     fun ackTelemetry(batchId: String, promise: Promise) {

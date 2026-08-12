@@ -7,7 +7,11 @@
  * Por defecto se omite (describe.skip) para no golpear el backend en CI.
  */
 import { HttpFogApiClient } from '../src/fog/api';
-import { enrichSos, enrichSosCancel, enrichTelemetry } from '../src/fog/enricher';
+import {
+  enrichSos,
+  enrichSosCancel,
+  enrichTelemetry,
+} from '../src/fog/enricher';
 import type {
   FogIdentity,
   WearSosCancelEnvelope,
@@ -46,7 +50,7 @@ const telemetryEnvelope: WearTelemetryEnvelope = {
     {
       id: 'e2e-1',
       capturedAt: '2026-08-10T21:00:30Z',
-      type: 'HEART_RATE',
+      type: 'heart_rate',
       payload: { bpm: 81.0, ibiMillis: [755, 760, 748], signalQuality: 0.93 },
     },
     {

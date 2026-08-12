@@ -1,9 +1,5 @@
 export type FogKind =
-  | 'telemetry'
-  | 'sos'
-  | 'sos-cancel'
-  | 'suspected'
-  | 'capabilities';
+  'telemetry' | 'sos' | 'sos-cancel' | 'suspected' | 'capabilities';
 
 export interface FogEntry {
   kind: FogKind;
@@ -105,7 +101,14 @@ export interface FogIdentity {
 export interface AuthResult {
   token: string;
   expiresAt: string;
-  user: { id: string; email: string };
+  user: {
+    id: string;
+    fullName?: string;
+    email: string;
+    planId?: string;
+    emailVerified?: boolean;
+    avatarUrl?: string | null;
+  };
 }
 
 export interface DeliveryResult {

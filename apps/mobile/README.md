@@ -1,6 +1,14 @@
 # AnxietyWatch Mobile
 
-Aplicación React Native 0.84 para Android. El teléfono será el coordinador local, pero esta primera entrega contiene únicamente una base compilable y segura.
+Aplicación React Native 0.84 para Android que funciona como nodo fog entre el
+Galaxy Watch y el backend oficial.
+
+La app inicia sesión en `https://api.mangoon.xyz`, guarda el JWT cifrado con
+Android Keystore y restaura/renueva la sesión mediante `/api/auth/session`. Los
+sobres recibidos por Wear Data Layer quedan en Room y una tarea Headless JS
+intenta entregarlos aunque la interfaz no esté abierta. Android no permite
+despertar una app que el usuario haya detenido de forma forzada; el reloj
+conserva los sobres durante ese caso.
 
 ## Variables de entorno
 
