@@ -4,6 +4,13 @@ import test from 'node:test';
 
 import { app } from '../src/app.ts';
 
+process.env.API_AUTH_TOKENS = 'test-token-1,test-token-2';
+
+const authHeaders = {
+  'content-type': 'application/json',
+  authorization: 'Bearer test-token-1',
+};
+
 test('GET /health reports the API status', async () => {
   const server = app.listen(0);
   await new Promise<void>((resolve) => server.once('listening', resolve));
@@ -55,7 +62,7 @@ test('POST /api/v1/telemetry/batch is idempotent by batchId', async () => {
       `http://127.0.0.1:${address.port}/api/v1/telemetry/batch`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: authHeaders,
         body: JSON.stringify(validBatch),
       },
     );
@@ -63,7 +70,7 @@ test('POST /api/v1/telemetry/batch is idempotent by batchId', async () => {
       `http://127.0.0.1:${address.port}/api/v1/telemetry/batch`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: authHeaders,
         body: JSON.stringify(validBatch),
       },
     );
@@ -95,7 +102,7 @@ test('POST /api/v1/sos/trigger validates and deduplicates events', async () => {
       `http://127.0.0.1:${address.port}/api/v1/sos/trigger`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: authHeaders,
         body: JSON.stringify(event),
       },
     );
@@ -103,7 +110,7 @@ test('POST /api/v1/sos/trigger validates and deduplicates events', async () => {
       `http://127.0.0.1:${address.port}/api/v1/sos/trigger`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: authHeaders,
         body: JSON.stringify(event),
       },
     );
@@ -135,7 +142,7 @@ test('POST /api/v1/sos/cancel validates and deduplicates events', async () => {
       `http://127.0.0.1:${address.port}/api/v1/sos/cancel`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: authHeaders,
         body: JSON.stringify(cancel),
       },
     );
@@ -143,7 +150,7 @@ test('POST /api/v1/sos/cancel validates and deduplicates events', async () => {
       `http://127.0.0.1:${address.port}/api/v1/sos/cancel`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: authHeaders,
         body: JSON.stringify(cancel),
       },
     );
@@ -151,6 +158,55 @@ test('POST /api/v1/sos/cancel validates and deduplicates events', async () => {
     assert.equal(first.status, 202);
     assert.equal(second.status, 200);
     assert.equal((await second.json()).duplicate, true);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
+test('POST /api/v1/telemetry/batch without token returns 401', async () => {
+  const server = app.listen(0);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address() as AddressInfo;
+
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/api/v1/telemetry/batch`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(validBatch),
+      },
+    );
+
+    assert.equal(response.status, 401);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
+test('POST /api/v1/telemetry/batch with invalid token returns 403', async () => {
+  const server = app.listen(0);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address() as AddressInfo;
+
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/api/v1/telemetry/batch`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: 'Bearer wrong-token',
+        },
+        body: JSON.stringify(validBatch),
+      },
+    );
+
+    assert.equal(response.status, 403);
   } finally {
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),

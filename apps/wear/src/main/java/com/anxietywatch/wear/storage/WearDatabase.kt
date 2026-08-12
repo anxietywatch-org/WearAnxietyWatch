@@ -52,7 +52,7 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
                 captured_at INTEGER NOT NULL,
                 type TEXT NOT NULL,
                 payload TEXT NOT NULL,
-                sync_state TEXT NOT NULL DEFAULT 'queued',
+                sync_state TEXT NOT NULL DEFAULT 'QUEUED',
                 attempts INTEGER NOT NULL DEFAULT 0,
                 batch_id TEXT
             )
@@ -65,7 +65,7 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
                 batch_id TEXT PRIMARY KEY,
                 from_millis INTEGER NOT NULL,
                 to_millis INTEGER NOT NULL,
-                state TEXT NOT NULL DEFAULT 'sent',
+                state TEXT NOT NULL DEFAULT 'SENT',
                 payload TEXT NOT NULL,
                 attempts INTEGER NOT NULL DEFAULT 0,
                 next_attempt_at INTEGER NOT NULL DEFAULT 0,
@@ -85,7 +85,7 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
                 rules_version TEXT NOT NULL,
                 user_response TEXT,
                 sos_status TEXT,
-                sync_state TEXT NOT NULL DEFAULT 'queued',
+                sync_state TEXT NOT NULL DEFAULT 'QUEUED',
                 attempts INTEGER NOT NULL DEFAULT 0,
                 next_attempt_at INTEGER NOT NULL DEFAULT 0,
                 remote_ack INTEGER NOT NULL DEFAULT 0
@@ -146,6 +146,19 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
                 "ALTER TABLE events ADD COLUMN remote_ack INTEGER NOT NULL DEFAULT 0",
             )
         }
+        if (oldVersion < 3) {
+            // Normaliza los estados a los nombres del enum SyncState (upper case).
+            // Las consultas filtran por SyncState.QUEUED.name etc., por lo que los
+            // valores en minúsculas ('pending', 'queued', ...) dejaban la telemetría
+            // atascada sin salir nunca del reloj.
+            db.execSQL("UPDATE telemetry SET sync_state = 'QUEUED' WHERE sync_state IN ('pending', 'queued')")
+            db.execSQL("UPDATE telemetry SET sync_state = 'CONFIRMED' WHERE sync_state IN ('synced', 'confirmed')")
+            db.execSQL("UPDATE events SET sync_state = 'QUEUED' WHERE sync_state IN ('pending', 'queued')")
+            db.execSQL("UPDATE events SET sync_state = 'CONFIRMED' WHERE sync_state IN ('synced', 'confirmed')")
+            db.execSQL("UPDATE sync_batches SET state = 'SENT' WHERE state IN ('sent', 'queued')")
+            db.execSQL("UPDATE sync_batches SET state = 'CONFIRMED' WHERE state = 'confirmed'")
+            db.execSQL("UPDATE sync_batches SET state = 'FAILED' WHERE state = 'failed'")
+        }
     }
 
     @Synchronized
@@ -156,7 +169,7 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
             put("captured_at", reading.capturedAtEpochMillis)
             put("type", reading.typeName())
             put("payload", reading.toJson().toString())
-            put("sync_state", "pending")
+            put("sync_state", SyncState.QUEUED.name)
         }
         writableDatabase.insertOrThrow("telemetry", null, values)
         trimTelemetry()
@@ -300,8 +313,8 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
 
     @Synchronized
     fun pendingCount(): Int = readableDatabase.rawQuery(
-        "SELECT COUNT(*) FROM telemetry WHERE sync_state IN ('queued', 'failed')",
-        null,
+        "SELECT COUNT(*) FROM telemetry WHERE sync_state IN (?, ?)",
+        arrayOf(SyncState.QUEUED.name, SyncState.FAILED.name),
     ).use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else 0 }
 
     @Synchronized
@@ -470,25 +483,26 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
     private fun trimTelemetry() {
         writableDatabase.delete(
             "telemetry",
-            "sync_state = 'confirmed' AND captured_at < ?",
-            arrayOf((System.currentTimeMillis() - SEVEN_DAYS_MILLIS).toString()),
+            "sync_state = ? AND captured_at < ?",
+            arrayOf(SyncState.CONFIRMED.name, (System.currentTimeMillis() - SEVEN_DAYS_MILLIS).toString()),
         )
         writableDatabase.execSQL(
             """
             DELETE FROM telemetry
             WHERE id IN (
                 SELECT id FROM telemetry
-                WHERE sync_state = 'confirmed'
+                WHERE sync_state = ?
                 ORDER BY captured_at ASC
                 LIMIT MAX(0, (SELECT COUNT(*) FROM telemetry) - $MAX_ROWS)
             )
             """.trimIndent(),
+            arrayOf(SyncState.CONFIRMED.name),
         )
     }
 
     companion object {
         private const val DATABASE_NAME = "anxietywatch-wear.db"
-        private const val DATABASE_VERSION = 2
+        private const val DATABASE_VERSION = 3
         private const val BASELINE_NAME = "heart-rate-v1"
         private const val MAX_ROWS = 10_000
         private const val SEVEN_DAYS_MILLIS = 7L * 24 * 60 * 60 * 1000

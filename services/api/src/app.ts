@@ -32,6 +32,36 @@ app.use((request: Request, response: Response, next: NextFunction) => {
   next();
 });
 
+/**
+ * Valida el token Bearer contra API_AUTH_TOKENS (CSV de tokens válidos).
+ * 401 si falta el header o no es Bearer; 403 si el token no es válido.
+ */
+function bearerAuth(request: Request, response: Response, next: NextFunction) {
+  const header = request.header('authorization');
+  if (!header?.startsWith('Bearer ')) {
+    response.status(401).json({
+      error: 'unauthorized',
+      message: 'Falta el encabezado Authorization con un token Bearer.',
+    });
+    return;
+  }
+  const token = header.slice('Bearer '.length).trim();
+  const validTokens = (process.env.API_AUTH_TOKENS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  if (!validTokens.includes(token)) {
+    response.status(403).json({
+      error: 'forbidden',
+      message: 'El token Bearer no es válido.',
+    });
+    return;
+  }
+  next();
+}
+
+app.use('/api/v1', bearerAuth);
+
 app.get('/health', (_request: Request, response: Response<HealthStatus>) => {
   response.status(200).json({
     status: 'ok',
