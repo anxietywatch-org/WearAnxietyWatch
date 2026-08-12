@@ -29,11 +29,12 @@ class WearFogListenerService : WearableListenerService() {
             if (event.type != DataEvent.TYPE_CHANGED) continue
             val item: DataItem = event.dataItem
             val path = item.uri.path ?: continue
-            val batchId = BATCH_PREFIX.destructure(path) ?: continue
+            val batchId = path.destructure(BATCH_PREFIX) ?: continue
             val payloadBytes = DataMapItem.fromDataItem(item).dataMap.getByteArray(PAYLOAD_KEY)
                 ?: (item.data.takeIf { it != null && it.isNotEmpty() })
                 ?: continue
             FogBridge.enqueueInbound(this, TELEMETRY_KIND, batchId, String(payloadBytes, Charsets.UTF_8))
+            FogHeadlessTaskService.start(this)
         }
     }
 
@@ -44,17 +45,21 @@ class WearFogListenerService : WearableListenerService() {
             path.startsWith(SOS_CANCEL_PREFIX) -> {
                 val eventId = path.destructure(SOS_CANCEL_PREFIX) ?: return
                 FogBridge.enqueueInbound(this, SOS_CANCEL_KIND, eventId, raw)
+                FogHeadlessTaskService.start(this)
             }
             path.startsWith(SOS_PREFIX) -> {
                 val eventId = path.destructure(SOS_PREFIX) ?: return
                 FogBridge.enqueueInbound(this, SOS_KIND, eventId, raw)
+                FogHeadlessTaskService.start(this)
             }
             path.startsWith(SUSPECTED_PREFIX) -> {
                 val eventId = path.destructure(SUSPECTED_PREFIX) ?: return
                 FogBridge.enqueueInbound(this, SUSPECTED_KIND, eventId, raw)
+                FogHeadlessTaskService.start(this)
             }
             path == CAPABILITIES_ENDPOINT -> {
                 FogBridge.enqueueInbound(this, CAPABILITIES_KIND, CapabilitiesKey, raw)
+                FogHeadlessTaskService.start(this)
             }
         }
     }

@@ -17,7 +17,8 @@ jest.mock('../src/fog/fogNode', () => ({
 }));
 
 test('renders correctly', async () => {
-  await ReactTestRenderer.act(() => {
+  await ReactTestRenderer.act(async () => {
     ReactTestRenderer.create(<App />);
+    await Promise.resolve();
   });
 });

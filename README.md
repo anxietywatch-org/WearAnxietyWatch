@@ -7,8 +7,8 @@ Plataforma de bienestar y apoyo conectada a Samsung Galaxy Watch7. AnxietyWatch 
 Capa fog funcional de punta a punta:
 
 - **Reloj (Wear OS, `apps/wear`)**: monitoreo con detección preliminar, SOS manual/cancelación, cola de salida con reintentos y confirmación por identificador. No hace HTTP: entrega sobres al teléfono por Wear Data Layer (`/fog/v1/...`, protocolo `fog_watch_v1`).
-- **Teléfono como nodo fog (`apps/mobile`, React Native)**: recibe los sobres (aunque la app esté cerrada), los persiste en una cola **Room/SQLite**, los enriquece con identidad y los entrega al API (`https://api.mangoon.xyz`, protocolo `fog_phone_v1`). Confirma solo tras aceptación del cloud (`202`/`200`) y reenvía con backoff. El ACK al reloj es por identificador: `/fog/v1/ack/telemetry/{batchId}`, `/fog/v1/ack/sos/{eventId}`, `/fog/v1/ack/sos-cancel/{eventId}`.
-- **API (`services/api`, Express 5)**: autenticación Bearer (`API_AUTH_TOKENS`), persistencia SQLite (`node:sqlite`, `FOG_DB_PATH`) con rutas idempotentes `POST /api/v1/telemetry/batch`, `POST /api/v1/sos/trigger` y `POST /api/v1/sos/cancel`, y notificación SOS por webhook (`CAREGIVER_WEBHOOK_URL`) con degradación a log.
+- **Teléfono como nodo fog (`apps/mobile`, React Native)**: inicia sesión contra `https://api.mangoon.xyz`, conserva el JWT cifrado con Android Keystore, recibe sobres aun sin interfaz abierta mediante Headless JS, los persiste en **Room/SQLite**, los enriquece y los entrega al API (protocolo `fog_phone_v1`). Confirma solo tras aceptación del cloud (`202`/`200`) y reenvía con backoff. El ACK al reloj es por identificador: `/fog/v1/ack/telemetry/{batchId}`, `/fog/v1/ack/sos/{eventId}`, `/fog/v1/ack/sos-cancel/{eventId}`.
+- **API de referencia local (`services/api`, Express 5)**: sirve para contratos y pruebas aisladas. El destino real del móvil es el backend oficial .NET desplegado en `https://api.mangoon.xyz`, que autentica cuentas AnxietyWatch y persiste en MongoDB Atlas.
 - **Servicio ML (`services/ml`, FastAPI)**: con `GET /health`; sin modelos en esta fase.
 - **Dashboard (`apps/web`, React + Vite)**: estático por ahora (no consume el API todavía).
 - **Contratos (`packages/contracts`)**: esquemas Zod compartidos.
@@ -99,7 +99,7 @@ Set-Location apps\mobile\android
 
 ## Limitaciones conocidas
 
-- El nodo fog móvil depende del runtime de React Native: con la app cerrada el reloj acumula sobres en su propia base hasta que la app se abra.
+- Si Android fuerza la detención manual de la app, el sistema no puede despertarla hasta que el usuario vuelva a abrirla; durante ese intervalo el reloj conserva sus sobres para reintentarlos.
 - El web es un dashboard estático sin capa de red.
 - `acceptedCaregiversFor` del API es un stub: el webhook SOS se dispara sin lista de cuidadores.
 - La autenticación valida la pertenencia del token a `API_AUTH_TOKENS`; la vinculación token↔usuario vendrá con el servicio de identidad futuro.
