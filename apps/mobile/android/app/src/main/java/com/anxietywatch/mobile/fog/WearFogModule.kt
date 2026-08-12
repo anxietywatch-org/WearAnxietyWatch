@@ -71,6 +71,12 @@ class WearFogModule(private val reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
+    fun markFailed(key: String, promise: Promise) {
+        FogBridge.markFailed(reactContext, key)
+        promise.resolve(true)
+    }
+
+    @ReactMethod
     fun inboundCount(promise: Promise) {
         promise.resolve(FogBridge.inboundCount(reactContext).toDouble())
     }

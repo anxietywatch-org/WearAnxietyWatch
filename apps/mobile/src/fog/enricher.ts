@@ -11,10 +11,10 @@ import type {
 
 const API_BASE = 'https://api.mangoon.xyz';
 
-const HEART_RATE = 'HEART_RATE';
-const IBI = 'IBI';
-const MOTION = 'ACCELEROMETER';
-const SKIN_TEMP = 'SKIN_TEMPERATURE';
+// Tipos de registro tal como los escribe el reloj (WearDatabase, en minúscula).
+const HEART_RATE = 'heart_rate';
+const MOTION = 'motion';
+const SKIN_TEMP = 'skin_temperature';
 
 function toSignalQuality(value: unknown): 'good' | 'fair' | 'poor' | 'unknown' {
   if (typeof value === 'number') {
@@ -32,10 +32,15 @@ function toSignalQuality(value: unknown): 'good' | 'fair' | 'poor' | 'unknown' {
   return 'unknown';
 }
 
+function isoOrNull(timestamp: string | number): string | null {
+  if (timestamp === null || timestamp === undefined) return null;
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+}
+
 function iso(timestamp: string | number): string {
-  return typeof timestamp === 'number'
-    ? new Date(timestamp).toISOString()
-    : new Date(timestamp).toISOString();
+  return isoOrNull(timestamp) ?? timestamp.toString();
 }
 
 function payloadOf(record: {
@@ -49,8 +54,9 @@ function sampleFromRecord(record: {
   type: string;
   payload: Record<string, unknown> | null;
 }): TelemetrySample | null {
+  const timestamp = isoOrNull(record.capturedAt);
+  if (!timestamp) return null;
   const p = payloadOf(record);
-  const timestamp = iso(record.capturedAt);
   const commonQuality = toSignalQuality(p.signalQuality ?? p.quality);
 
   switch (record.type) {
@@ -72,24 +78,6 @@ function sampleFromRecord(record: {
           wearingState: 'unknown',
         },
       };
-    case IBI: {
-      const ibi = Array.isArray(p.ibiMillis)
-        ? (p.ibiMillis as number[]).filter(v => typeof v === 'number')
-        : [];
-      return {
-        timestamp,
-        heartRateBpm: null,
-        ibiMs: ibi.slice(0, 16),
-        accelerometer: null,
-        skinTemperatureCelsius: null,
-        ambientTemperatureCelsius: null,
-        quality: {
-          heartRate: 'unknown',
-          ibi: commonQuality,
-          wearingState: 'unknown',
-        },
-      };
-    }
     case MOTION:
       return {
         timestamp,
@@ -120,6 +108,8 @@ function sampleFromRecord(record: {
         },
       };
     default:
+      // steps / availability / tipos desconocidos no tienen representación
+      // en el DTO público del cloud: se descartan del lote.
       return null;
   }
 }
@@ -171,7 +161,7 @@ export function enrichSosCancel(
     eventId: envelope.eventId,
     userId: identity.userId,
     deviceId: identity.deviceId,
-    cancelledAt: iso(envelope.triggeredAt),
+    cancelledAt: iso(envelope.cancelledAt ?? envelope.triggeredAt),
     reason: envelope.reason || undefined,
   };
 }

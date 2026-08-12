@@ -11,14 +11,16 @@ interface FogOutboxDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     fun insert(entry: FogOutboxEntry): Long
 
-    @Query("SELECT COUNT(*) FROM fog_outbox WHERE state != :ackedState")
-    fun countPending(ackedState: String = FogOutboxEntry.STATE_WATCH_ACKED): Int
+    @Query(
+        "SELECT COUNT(*) FROM fog_outbox WHERE state != :ackedState AND next_attempt_at <= :now",
+    )
+    fun countPending(now: Long, ackedState: String = FogOutboxEntry.STATE_WATCH_ACKED): Int
 
     @Query(
-        "SELECT * FROM fog_outbox WHERE state != :ackedState " +
+        "SELECT * FROM fog_outbox WHERE state != :ackedState AND next_attempt_at <= :now " +
             "ORDER BY received_at ASC",
     )
-    fun pending(ackedState: String = FogOutboxEntry.STATE_WATCH_ACKED): List<FogOutboxEntry>
+    fun pending(now: Long, ackedState: String = FogOutboxEntry.STATE_WATCH_ACKED): List<FogOutboxEntry>
 
     @Query("SELECT * FROM fog_outbox WHERE kind = :kind AND entity_id = :entityId LIMIT 1")
     fun byKey(kind: String, entityId: String): FogOutboxEntry?
@@ -63,4 +65,7 @@ interface FogOutboxDao {
 
     @Query("DELETE FROM fog_outbox WHERE state = :ackedState AND watch_acked_at < :cutoff")
     fun cleanupAcked(cutoff: Long, ackedState: String = FogOutboxEntry.STATE_WATCH_ACKED): Int
+
+    @Query("DELETE FROM fog_outbox WHERE state = :failedState AND received_at < :cutoff")
+    fun cleanupFailed(cutoff: Long, failedState: String = FogOutboxEntry.STATE_FAILED): Int
 }

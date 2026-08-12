@@ -47,18 +47,37 @@ export class HttpFogApiClient implements FogApiClient {
     private readonly identity: FogIdentity,
   ) {}
 
+  private static async post(
+    url: string,
+    payload: unknown,
+    token: string,
+  ): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      return await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async postTelemetry(
     payload: TelemetryBatchPayload,
     token: string,
   ): Promise<DeliveryResult> {
-    const response = await fetch(`${this.baseUrl}/api/v1/telemetry/batch`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(payload),
-    });
+    const response = await HttpFogApiClient.post(
+      `${this.baseUrl}/api/v1/telemetry/batch`,
+      payload,
+      token,
+    );
     return this.toResult(payload.batchId, 'telemetry', response);
   }
 
@@ -66,14 +85,11 @@ export class HttpFogApiClient implements FogApiClient {
     payload: SosTriggerPayload,
     token: string,
   ): Promise<DeliveryResult> {
-    const response = await fetch(`${this.baseUrl}/api/v1/sos/trigger`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(payload),
-    });
+    const response = await HttpFogApiClient.post(
+      `${this.baseUrl}/api/v1/sos/trigger`,
+      payload,
+      token,
+    );
     return this.toResult(payload.eventId, 'sos', response);
   }
 
@@ -81,14 +97,11 @@ export class HttpFogApiClient implements FogApiClient {
     payload: SosCancelPayload,
     token: string,
   ): Promise<DeliveryResult> {
-    const response = await fetch(`${this.baseUrl}/api/v1/sos/cancel`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(payload),
-    });
+    const response = await HttpFogApiClient.post(
+      `${this.baseUrl}/api/v1/sos/cancel`,
+      payload,
+      token,
+    );
     return this.toResult(payload.eventId, 'sos-cancel', response);
   }
 
