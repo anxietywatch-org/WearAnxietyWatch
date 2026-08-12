@@ -35,6 +35,11 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -65,4 +70,7 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // Implementación real de org.json para los unit tests locales (AGP la deja como stub).
     testImplementation("org.json:json:20240303")
+    // Robolectric para probar WearDatabase (SQLite real en la JVM).
+    testImplementation("org.robolectric:robolectric:4.16")
+    testImplementation("androidx.test:core:1.6.1")
 }
