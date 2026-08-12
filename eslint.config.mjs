@@ -8,6 +8,9 @@ export default tseslint.config(
   {
     files: [
       'apps/web/src/**/*.{ts,tsx}',
+      'apps/mobile/App.{ts,tsx}',
+      'apps/mobile/index.js',
+      'apps/mobile/src/**/*.{ts,tsx}',
       'services/api/src/**/*.ts',
       'packages/contracts/src/**/*.ts',
     ],

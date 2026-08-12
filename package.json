@@ -16,7 +16,7 @@
   "scripts": {
     "build": "npm run build --workspace @anxietywatch/contracts && npm run build --workspace @anxietywatch/api && npm run build --workspace @anxietywatch/web",
     "test": "npm run test --workspaces --if-present",
-    "lint": "eslint apps/web/src services/api/src packages/contracts/src && npm run lint --workspace @anxietywatch/mobile",
+    "lint": "eslint apps/web/src apps/mobile/src services/api/src packages/contracts/src && npm run lint --workspace @anxietywatch/mobile",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "dev:api": "npm run dev --workspace @anxietywatch/api",
