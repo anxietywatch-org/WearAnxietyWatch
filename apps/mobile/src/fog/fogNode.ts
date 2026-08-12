@@ -132,8 +132,10 @@ class FogNode {
         );
         if (result.status === 'accepted' || result.status === 'duplicate') {
           await this.nextSequence();
-          await WearFog.complete(entry.key);
+          await WearFog.markCloudAcked(entry.key);
           if (await this.tryAck(entry)) {
+            await WearFog.markWatchAcked(entry.key);
+            await WearFog.complete(entry.key);
             this.lastDelivery = result;
           }
         } else if (result.status === 'unauthorized') {
@@ -152,13 +154,15 @@ class FogNode {
   private async tryAck(entry: FogEntry): Promise<boolean> {
     try {
       if (entry.kind === 'telemetry') {
-        await WearFog.ackTelemetry(entry.key);
-      } else if (entry.kind === 'sos') {
-        await WearFog.ackSos(entry.key);
-      } else if (entry.kind === 'sos-cancel') {
-        await WearFog.ackSosCancel(entry.key);
+        return (await WearFog.ackTelemetry(entry.key)) === true;
       }
-      return true;
+      if (entry.kind === 'sos') {
+        return (await WearFog.ackSos(entry.key)) === true;
+      }
+      if (entry.kind === 'sos-cancel') {
+        return (await WearFog.ackSosCancel(entry.key)) === true;
+      }
+      return false;
     } catch {
       return false;
     }

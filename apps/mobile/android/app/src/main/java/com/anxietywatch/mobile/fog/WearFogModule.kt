@@ -9,6 +9,7 @@ import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.modules.core.DeviceEventManagerModule
+import com.google.android.gms.tasks.Tasks
 import com.google.android.gms.wearable.Node
 import com.google.android.gms.wearable.Wearable
 import org.json.JSONObject
@@ -53,7 +54,19 @@ class WearFogModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun complete(key: String, promise: Promise) {
-        FogBridge.completeInbound(reactContext, key)
+        val deleted = FogBridge.completeInbound(reactContext, key)
+        promise.resolve(deleted)
+    }
+
+    @ReactMethod
+    fun markCloudAcked(key: String, promise: Promise) {
+        FogBridge.markCloudAcked(reactContext, key)
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    fun markWatchAcked(key: String, promise: Promise) {
+        FogBridge.markWatchAcked(reactContext, key)
         promise.resolve(true)
     }
 
@@ -93,20 +106,17 @@ class WearFogModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun ackTelemetry(batchId: String, promise: Promise) {
-        sendAckToWear(reactContext, WearFogListenerService.ACK_TELEMETRY_PREFIX + batchId)
-        promise.resolve(true)
+        sendAckToWear(reactContext, WearFogListenerService.ACK_TELEMETRY_PREFIX + batchId, promise)
     }
 
     @ReactMethod
     fun ackSos(eventId: String, promise: Promise) {
-        sendAckToWear(reactContext, WearFogListenerService.ACK_SOS_PREFIX + eventId)
-        promise.resolve(true)
+        sendAckToWear(reactContext, WearFogListenerService.ACK_SOS_PREFIX + eventId, promise)
     }
 
     @ReactMethod
     fun ackSosCancel(eventId: String, promise: Promise) {
-        sendAckToWear(reactContext, WearFogListenerService.ACK_SOS_CANCEL_PREFIX + eventId)
-        promise.resolve(true)
+        sendAckToWear(reactContext, WearFogListenerService.ACK_SOS_CANCEL_PREFIX + eventId, promise)
     }
 
     @ReactMethod
@@ -124,8 +134,27 @@ class WearFogModule(private val reactContext: ReactApplicationContext) :
     }
 
     companion object {
-        fun sendAckToWear(context: ReactApplicationContext, route: String) {
-            sendMessageToWear(context, route, ByteArray(0))
+        /**
+         * Confirma entrega al reloj esperando el resultado real del envío.
+         * Resuelve `true` solo si al menos un nodo recibió el mensaje ACK.
+         */
+        fun sendAckToWear(context: ReactApplicationContext, route: String, promise: Promise) {
+            val messageClient = Wearable.getMessageClient(context)
+            val nodeClient = Wearable.getNodeClient(context)
+            nodeClient.connectedNodes.addOnCompleteListener { nodesTask ->
+                val nodes: List<Node> = nodesTask.result ?: emptyList()
+                if (nodes.isEmpty()) {
+                    promise.resolve(false)
+                    return@addOnCompleteListener
+                }
+                val sends = nodes.map { node ->
+                    messageClient.sendMessage(node.id, route, ByteArray(0))
+                }
+                Tasks.whenAllComplete(ArrayList(sends)).addOnCompleteListener { task ->
+                    val delivered = task.result?.any { it.isSuccessful } == true
+                    promise.resolve(delivered)
+                }
+            }
         }
 
         private fun sendMessageToWear(context: ReactApplicationContext, route: String, payload: ByteArray) {
