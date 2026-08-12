@@ -183,7 +183,7 @@ class FogNode {
             this.token,
             BASE_URL,
           );
-        } catch (error) {
+        } catch {
           // Error de red/timeout: backoff nativo y se reintenta el siguiente ciclo.
           await this.failEntry(entry);
           continue;
@@ -216,7 +216,7 @@ class FogNode {
       try {
         this.pending = await WearFog.inboundCount();
       } catch {
-        this.pending = this.pending;
+        // Se conserva el valor anterior de pending.
       }
       this.emit();
     }
