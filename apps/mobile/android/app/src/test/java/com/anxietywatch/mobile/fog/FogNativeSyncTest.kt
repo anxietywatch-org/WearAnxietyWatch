@@ -11,7 +11,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34], manifest = Config.NONE)
+@Config(sdk = [34], manifest = Config.NONE, application = android.app.Application::class)
 class FogNativeSyncTest {
     private val identity = JSONObject().put("userId", "user-1").put("deviceId", "device-1")
         .put("sessionId", "session-1").put("sequence", 7)
