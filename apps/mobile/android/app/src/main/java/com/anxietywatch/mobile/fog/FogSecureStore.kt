@@ -1,23 +1,33 @@
 package com.anxietywatch.mobile.fog
 
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import org.json.JSONObject
 
-/** Session and fog identity encrypted with an AES/GCM Android Keystore key. */
-class FogSecureStore(context: Context) {
-    private val appContext = context.applicationContext
-    private val legacy = appContext.getSharedPreferences(LEGACY_PREFS, Context.MODE_PRIVATE)
-    private val prefs = EncryptedSharedPreferences.create(
-        appContext,
-        SECURE_PREFS,
-        MasterKey.Builder(appContext, KEY_ALIAS)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build(),
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+/**
+ * Session and fog identity encrypted with an AES/GCM Android Keystore key.
+ *
+ * Production uses [EncryptedSharedPreferences] backed by [MasterKey]; unit
+ * tests can inject plain SharedPreferences through the internal constructor
+ * because Android Keystore is unavailable under Robolectric.
+ */
+class FogSecureStore private constructor(
+    private val appContext: Context,
+    private val prefs: SharedPreferences,
+) {
+    constructor(context: Context) : this(
+        context.applicationContext,
+        encryptedPrefs(context.applicationContext),
     )
+
+    internal constructor(context: Context, prefs: SharedPreferences) : this(
+        context.applicationContext,
+        prefs,
+    )
+
+    private val legacy = appContext.getSharedPreferences(LEGACY_PREFS, Context.MODE_PRIVATE)
 
     init { migrateLegacyIdentity() }
 
@@ -85,5 +95,16 @@ class FogSecureStore(context: Context) {
         private const val TOKEN = "token"
         private const val AUTH = "auth"
         private const val IDENTITY = "identity"
+
+        private fun encryptedPrefs(context: Context): SharedPreferences =
+            EncryptedSharedPreferences.create(
+                context,
+                SECURE_PREFS,
+                MasterKey.Builder(context, KEY_ALIAS)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build(),
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+            )
     }
 }
