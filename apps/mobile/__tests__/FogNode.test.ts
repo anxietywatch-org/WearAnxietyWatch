@@ -26,6 +26,9 @@ jest.mock('react-native', () => {
     getAuth: jest.fn().mockResolvedValue(''),
     setAuth: jest.fn().mockResolvedValue(true),
     clearAuth: jest.fn().mockResolvedValue(true),
+    getToken: jest.fn().mockResolvedValue(''),
+    setToken: jest.fn().mockResolvedValue(true),
+    scheduleSync: jest.fn().mockResolvedValue(true),
     addListener: jest.fn(),
     removeListeners: jest.fn(),
   };
@@ -89,6 +92,9 @@ beforeEach(async () => {
   WearFog.ackSosCancel.mockResolvedValue(true);
   WearFog.setAuth.mockResolvedValue(true);
   WearFog.clearAuth.mockResolvedValue(true);
+  WearFog.getToken.mockResolvedValue('');
+  WearFog.setToken.mockResolvedValue(true);
+  WearFog.scheduleSync.mockResolvedValue(true);
   await flushOnce();
 });
 
@@ -182,5 +188,28 @@ describe('fogNode flush', () => {
     expect(fogNode.getState().unauthorized).toBe(true);
     expect(WearFog.ackSos).not.toHaveBeenCalled();
     expect(WearFog.complete).not.toHaveBeenCalled();
+  });
+
+  it('persiste el token y agenda el worker cuando quedan pendientes', async () => {
+    WearFog.peek.mockResolvedValue(JSON.stringify([entry('telemetry')]));
+    WearFog.inboundCount.mockResolvedValue(1);
+    mockDeliver('accepted');
+
+    await flushOnce();
+
+    expect(WearFog.setToken).toHaveBeenCalledWith('t');
+    expect(WearFog.scheduleSync).toHaveBeenCalledWith(600_000);
+  });
+
+  it('un duplicado 200 sigue la misma secuencia de ACK que un 202', async () => {
+    WearFog.peek.mockResolvedValue(JSON.stringify([entry('sos-cancel')]));
+    mockDeliver('duplicate');
+
+    await flushOnce();
+
+    expect(WearFog.markCloudAcked).toHaveBeenCalledWith('sos-cancel:sos-cancel-id-1');
+    expect(WearFog.ackSosCancel).toHaveBeenCalledWith('sos-cancel-id-1');
+    expect(WearFog.markWatchAcked).toHaveBeenCalled();
+    expect(WearFog.complete).toHaveBeenCalled();
   });
 });

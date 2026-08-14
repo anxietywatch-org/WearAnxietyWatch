@@ -3,12 +3,12 @@
 Aplicación React Native 0.84 para Android que funciona como nodo fog entre el
 Galaxy Watch y el backend oficial.
 
-La app inicia sesión en `https://api.mangoon.xyz`, guarda el JWT cifrado con
-Android Keystore y restaura/renueva la sesión mediante `/api/auth/session`. Los
-sobres recibidos por Wear Data Layer quedan en Room y una tarea Headless JS
-intenta entregarlos aunque la interfaz no esté abierta. Android no permite
-despertar una app que el usuario haya detenido de forma forzada; el reloj
-conserva los sobres durante ese caso.
+La app inicia sesión en `https://api.mangoon.xyz`, guarda el JWT y la identidad
+fog cifrados con la clave Android Keystore `anxietywatch_fog_v1`, y restaura la
+sesión mediante `/api/auth/session`. Los sobres de Wear Data Layer quedan en
+Room y un `CoroutineWorker` Kotlin los entrega sin depender de React Native. El
+trabajo único `fog-sync` exige conectividad, usa backoff y sólo elimina la fila
+después del ACK real al reloj.
 
 ## Variables de entorno
 
@@ -51,5 +51,5 @@ seguro de CI, o el par no se vinculará.
 
 - Android no permite despertar una app que el usuario detuvo de forma forzada;
   en ese caso el reloj conserva los sobres (colas idempotentes en su base local).
-- El HTTP autenticado solo se ejecuta con JavaScript activo; Room retiene el
-  sobre y la tarea Headless reanuda el intento.
+- Android no ejecuta trabajo si el usuario fuerza la detención; Room y la cola
+  del reloj conservan los sobres hasta que la app pueda reiniciarse.

@@ -126,6 +126,11 @@ class FogNode {
     ) {
       await this.persistIdentity();
     }
+    try {
+      this.token = (await WearFog.getToken()) || this.token;
+    } catch {
+      // Compatibilidad con instalaciones anteriores del puente nativo.
+    }
   }
 
   private async persistIdentity(): Promise<void> {
@@ -134,6 +139,11 @@ class FogNode {
 
   async setAuthenticated(auth: AuthResult): Promise<void> {
     await persistAuth(auth);
+    try {
+      await WearFog.setToken(auth.token);
+    } catch {
+      // Compatibilidad con puentes nativos anteriores.
+    }
     await this.applyAuthentication(auth);
     await this.flush();
   }
@@ -149,6 +159,11 @@ class FogNode {
   async clearAuthentication(): Promise<void> {
     await clearPersistedAuth();
     this.token = '';
+    try {
+      await WearFog.setToken('');
+    } catch {
+      // clearAuth sigue limpiando versiones anteriores del almacén.
+    }
     this.identity = { ...this.identity, userId: '' };
     this.unauthorized = false;
     await this.persistIdentity();
@@ -248,6 +263,13 @@ class FogNode {
       } catch {
         // Se conserva el valor anterior de pending.
       }
+      if (this.pending > 0) {
+        try {
+          await WearFog.scheduleSync(600_000);
+        } catch {
+          // El temporizador JS conserva el reintento en versiones anteriores.
+        }
+      }
       this.emit();
     }
   }
@@ -277,6 +299,11 @@ class FogNode {
     this.token = '';
     this.setUnauthorized();
     await clearPersistedAuth();
+    try {
+      await WearFog.setToken('');
+    } catch {
+      // clearPersistedAuth ya limpió el almacén compatible.
+    }
   }
 
   private emit(): void {

@@ -117,7 +117,8 @@ jobs:
             -keysize 2048 \
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
-      - run: ./apps/mobile/android/gradlew -p apps/mobile/android testDebugUnitTest assembleDebug
+      - run: ./apps/mobile/android/gradlew -p apps/mobile/android testDebugUnitTest
+      - run: ./apps/mobile/android/gradlew -p apps/mobile/android assembleDebug
 
   ml:
     needs: changes
