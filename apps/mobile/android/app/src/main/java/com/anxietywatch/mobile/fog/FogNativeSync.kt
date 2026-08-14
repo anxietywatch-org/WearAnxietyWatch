@@ -38,7 +38,8 @@ object FogNativeSync {
             }
             try {
                 if (entry.state != FogOutboxEntry.STATE_CLOUD_ACKED) {
-                    val request = requestFor(entry, identity) ?: run {
+                    val request = requestFor(entry, identity)
+                    if (request == null) {
                         fail(dao, entry, clockMillis())
                         continue
                     }
