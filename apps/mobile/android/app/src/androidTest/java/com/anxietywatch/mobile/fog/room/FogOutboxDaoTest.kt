@@ -55,8 +55,10 @@ class FogOutboxDaoTest {
         dao.insert(entry("sos-cancel", "event-1", now))
         dao.insert(entry("telemetry", "event-1", now))
 
-        assertEquals(1, dao.countPending(now))
-        assertEquals(1, dao.byKey("sos", "event-1")!!.attempts)
+        assertEquals(3, dao.countPending(now))
+        assertEquals(0, dao.byKey("sos", "event-1")!!.attempts)
+        assertNotNull(dao.byKey("sos-cancel", "event-1"))
+        assertNotNull(dao.byKey("telemetry", "event-1"))
     }
 
     @Test
