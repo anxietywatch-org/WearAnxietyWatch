@@ -18,13 +18,13 @@ class FogSecureStore private constructor(
     private val prefs: SharedPreferences,
 ) {
     constructor(context: Context) : this(
-        context.applicationContext,
-        encryptedPrefs(context.applicationContext),
+        appContext = context.applicationContext,
+        prefs = encryptedPrefs(context.applicationContext),
     )
 
     internal constructor(context: Context, prefs: SharedPreferences) : this(
-        context.applicationContext,
-        prefs,
+        appContext = context.applicationContext,
+        prefs = prefs,
     )
 
     private val legacy = appContext.getSharedPreferences(LEGACY_PREFS, Context.MODE_PRIVATE)
