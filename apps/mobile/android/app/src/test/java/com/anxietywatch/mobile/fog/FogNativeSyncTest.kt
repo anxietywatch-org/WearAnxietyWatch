@@ -6,6 +6,12 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34], manifest = Config.NONE)
 class FogNativeSyncTest {
     private val identity = JSONObject().put("userId", "user-1").put("deviceId", "device-1")
         .put("sessionId", "session-1").put("sequence", 7)
