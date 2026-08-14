@@ -2,6 +2,7 @@ package com.anxietywatch.mobile.fog
 
 import android.content.Context
 import com.anxietywatch.mobile.fog.room.FogDatabase
+import com.anxietywatch.mobile.fog.room.FogOutboxDao
 import com.anxietywatch.mobile.fog.room.FogOutboxEntry
 import org.json.JSONArray
 import org.json.JSONObject
@@ -26,10 +27,10 @@ object FogNativeSync {
         httpPost: HttpPost = HttpPost(::postJson),
         ackToWear: AckToWear = AckToWear { WearFogModule.sendAckToWear(context, it) },
         clockMillis: () -> Long = System::currentTimeMillis,
+        dao: FogOutboxDao = FogDatabase.get(context).fogOutboxDao(),
     ): Outcome {
         val identity = runCatching { JSONObject(identityJson) }.getOrNull() ?: return Outcome.PENDING
         if (token.isBlank() || identity.optString("userId").isBlank()) return Outcome.PENDING
-        val dao = FogDatabase.get(context).fogOutboxDao()
         val entries = dao.pending(clockMillis())
         for (entry in entries) {
             if (entry.kind !in setOf("telemetry", "sos", "sos-cancel")) {
@@ -155,7 +156,7 @@ object FogNativeSync {
         else -> WearFogListenerService.ACK_SOS_CANCEL_PREFIX
     } + entry.entityId
 
-    private fun fail(dao: com.anxietywatch.mobile.fog.room.FogOutboxDao, entry: FogOutboxEntry, now: Long) {
+    private fun fail(dao: FogOutboxDao, entry: FogOutboxEntry, now: Long) {
         val attempts = dao.byKey(entry.kind, entry.entityId)?.attempts ?: entry.attempts
         val backoff = minOf(BASE_BACKOFF_MS * (1L shl attempts.coerceAtMost(5)), MAX_BACKOFF_MS)
         dao.markFailed(entry.kind, entry.entityId, now + backoff)
