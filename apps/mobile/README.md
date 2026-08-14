@@ -39,6 +39,17 @@ Los módulos futuros vivirán bajo `src/` por dominio. El módulo nativo de Wear
 - La pantalla inicial indica que el reloj aún no está vinculado.
 - El texto visible no afirma diagnósticos.
 
+## Vínculo con el reloj (Wear Data Layer)
+
+Wear Data Layer exige que el teléfono y el reloj compartan `applicationId` y
+certificado de firma. Ambos usan `com.anxietywatch.wear`; las builds debug
+firman con la clave predeterminada de Android (`~/.android/debug.keystore`).
+Las builds release deben firmarse con la misma clave privada desde el almacén
+seguro de CI, o el par no se vinculará.
+
 ## Limitaciones conocidas
 
-No hay autenticación, Data Layer, almacenamiento offline ni permisos de ubicación. Se implementarán después de la prueba vertical.
+- Android no permite despertar una app que el usuario detuvo de forma forzada;
+  en ese caso el reloj conserva los sobres (colas idempotentes en su base local).
+- El HTTP autenticado solo se ejecuta con JavaScript activo; Room retiene el
+  sobre y la tarea Headless reanuda el intento.
