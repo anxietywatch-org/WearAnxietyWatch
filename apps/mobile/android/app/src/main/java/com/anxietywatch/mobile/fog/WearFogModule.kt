@@ -1,8 +1,6 @@
 package com.anxietywatch.mobile.fog
 
 import android.content.Context
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -29,22 +27,7 @@ import org.json.JSONObject
 class WearFogModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
-    private val prefs by lazy {
-        reactContext.getSharedPreferences("fog_identity", Context.MODE_PRIVATE)
-    }
-
-    private val securePrefs by lazy {
-        val masterKey = MasterKey.Builder(reactContext)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-        EncryptedSharedPreferences.create(
-            reactContext,
-            "fog_secure_session",
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-        )
-    }
+    private val secureStore by lazy { FogSecureStore(reactContext) }
 
     override fun getName(): String = "WearFog"
 
@@ -98,47 +81,53 @@ class WearFogModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun getIdentity(promise: Promise) {
-        promise.resolve(
-            JSONObject()
-                .put("userId", prefs.getString("userId", ""))
-                .put("deviceId", prefs.getString("deviceId", ""))
-                .put("sessionId", prefs.getString("sessionId", ""))
-                .put("sequence", prefs.getLong("sequence", 0L))
-                .toString(),
-        )
+        promise.resolve(secureStore.getIdentity())
     }
 
     @ReactMethod
     fun setIdentity(identity: ReadableMap, promise: Promise) {
-        prefs.edit()
-            .putString("userId", identity.getString("userId") ?: prefs.getString("userId", ""))
-            .putString("deviceId", identity.getString("deviceId") ?: prefs.getString("deviceId", ""))
-            .putString("sessionId", identity.getString("sessionId") ?: prefs.getString("sessionId", ""))
-            .apply()
+        secureStore.setIdentity(
+            identity.getString("userId"),
+            identity.getString("deviceId"),
+            identity.getString("sessionId"),
+        )
         promise.resolve(true)
     }
 
     @ReactMethod
     fun nextSequence(promise: Promise) {
-        val next = prefs.getLong("sequence", 0L) + 1
-        prefs.edit().putLong("sequence", next).apply()
-        promise.resolve(next.toDouble())
+        promise.resolve(secureStore.nextSequence().toDouble())
     }
 
     @ReactMethod
     fun getAuth(promise: Promise) {
-        promise.resolve(securePrefs.getString("auth", ""))
+        promise.resolve(secureStore.getAuth() ?: "")
     }
 
     @ReactMethod
     fun setAuth(authJson: String, promise: Promise) {
-        securePrefs.edit().putString("auth", authJson).apply()
+        secureStore.setAuth(authJson)
         promise.resolve(true)
     }
 
     @ReactMethod
     fun clearAuth(promise: Promise) {
-        securePrefs.edit().remove("auth").apply()
+        secureStore.clearAuth()
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    fun getToken(promise: Promise) = promise.resolve(secureStore.getToken() ?: "")
+
+    @ReactMethod
+    fun setToken(token: String, promise: Promise) {
+        secureStore.setToken(token)
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    fun scheduleSync(delayMs: Double, promise: Promise) {
+        FogSyncScheduler.schedule(reactContext, delayMs.toLong())
         promise.resolve(true)
     }
 
@@ -201,6 +190,13 @@ class WearFogModule(private val reactContext: ReactApplicationContext) :
                 }
             }
         }
+
+        fun sendAckToWear(context: Context, route: String): Boolean = runCatching {
+            val nodes = Tasks.await(Wearable.getNodeClient(context).connectedNodes)
+            nodes.any { node ->
+                runCatching { Tasks.await(Wearable.getMessageClient(context).sendMessage(node.id, route, ByteArray(0))) }.isSuccess
+            }
+        }.getOrDefault(false)
 
         private fun sendMessageToWear(context: ReactApplicationContext, route: String, payload: ByteArray) {
             val messageClient = Wearable.getMessageClient(context)

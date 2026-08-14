@@ -3,12 +3,12 @@
 Aplicación React Native 0.84 para Android que funciona como nodo fog entre el
 Galaxy Watch y el backend oficial.
 
-La app inicia sesión en `https://api.mangoon.xyz`, guarda el JWT cifrado con
-Android Keystore y restaura/renueva la sesión mediante `/api/auth/session`. Los
-sobres recibidos por Wear Data Layer quedan en Room y una tarea Headless JS
-intenta entregarlos aunque la interfaz no esté abierta. Android no permite
-despertar una app que el usuario haya detenido de forma forzada; el reloj
-conserva los sobres durante ese caso.
+La app inicia sesión en `https://api.mangoon.xyz`, guarda el JWT y la identidad
+fog cifrados con la clave Android Keystore `anxietywatch_fog_v1`, y restaura la
+sesión mediante `/api/auth/session`. Los sobres de Wear Data Layer quedan en
+Room y un `CoroutineWorker` Kotlin los entrega sin depender de React Native. El
+trabajo único `fog-sync` exige conectividad, usa backoff y sólo elimina la fila
+después del ACK real al reloj.
 
 ## Variables de entorno
 
@@ -39,6 +39,17 @@ Los módulos futuros vivirán bajo `src/` por dominio. El módulo nativo de Wear
 - La pantalla inicial indica que el reloj aún no está vinculado.
 - El texto visible no afirma diagnósticos.
 
+## Vínculo con el reloj (Wear Data Layer)
+
+Wear Data Layer exige que el teléfono y el reloj compartan `applicationId` y
+certificado de firma. Ambos usan `com.anxietywatch.wear`; las builds debug
+firman con la clave predeterminada de Android (`~/.android/debug.keystore`).
+Las builds release deben firmarse con la misma clave privada desde el almacén
+seguro de CI, o el par no se vinculará.
+
 ## Limitaciones conocidas
 
-No hay autenticación, Data Layer, almacenamiento offline ni permisos de ubicación. Se implementarán después de la prueba vertical.
+- Android no permite despertar una app que el usuario detuvo de forma forzada;
+  en ese caso el reloj conserva los sobres (colas idempotentes en su base local).
+- Android no ejecuta trabajo si el usuario fuerza la detención; Room y la cola
+  del reloj conservan los sobres hasta que la app pueda reiniciarse.

@@ -34,7 +34,7 @@ class WearFogListenerService : WearableListenerService() {
                 ?: (item.data.takeIf { it != null && it.isNotEmpty() })
                 ?: continue
             FogBridge.enqueueInbound(this, TELEMETRY_KIND, batchId, String(payloadBytes, Charsets.UTF_8))
-            FogHeadlessTaskService.start(this)
+            FogSyncScheduler.schedule(this)
         }
     }
 
@@ -45,21 +45,21 @@ class WearFogListenerService : WearableListenerService() {
             path.startsWith(SOS_CANCEL_PREFIX) -> {
                 val eventId = path.destructure(SOS_CANCEL_PREFIX) ?: return
                 FogBridge.enqueueInbound(this, SOS_CANCEL_KIND, eventId, raw)
-                FogHeadlessTaskService.start(this)
+                FogSyncScheduler.schedule(this)
             }
             path.startsWith(SOS_PREFIX) -> {
                 val eventId = path.destructure(SOS_PREFIX) ?: return
                 FogBridge.enqueueInbound(this, SOS_KIND, eventId, raw)
-                FogHeadlessTaskService.start(this)
+                FogSyncScheduler.schedule(this)
             }
             path.startsWith(SUSPECTED_PREFIX) -> {
                 val eventId = path.destructure(SUSPECTED_PREFIX) ?: return
                 FogBridge.enqueueInbound(this, SUSPECTED_KIND, eventId, raw)
-                FogHeadlessTaskService.start(this)
+                FogSyncScheduler.schedule(this)
             }
             path == CAPABILITIES_ENDPOINT -> {
                 FogBridge.enqueueInbound(this, CAPABILITIES_KIND, CapabilitiesKey, raw)
-                FogHeadlessTaskService.start(this)
+                FogSyncScheduler.schedule(this)
             }
         }
     }
