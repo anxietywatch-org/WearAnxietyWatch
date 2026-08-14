@@ -1,6 +1,7 @@
 package com.anxietywatch.wear.datalayer
 
 import android.content.Context
+import android.net.Uri
 import com.anxietywatch.wear.domain.PendingEvent
 import com.anxietywatch.wear.storage.StoredBatch
 import com.anxietywatch.wear.storage.SyncState
@@ -12,8 +13,7 @@ import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import java.util.UUID
 import kotlin.random.Random
@@ -34,7 +34,7 @@ class OutboxSyncer(
     private val connectionObserver: PhoneConnectionObserver,
     private val scope: CoroutineScope,
 ) {
-    private val trigger = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    private val trigger = Channel<Unit>(Channel.CONFLATED)
     private var job: Job? = null
     private val announcedNodes = mutableSetOf<String>()
 
@@ -45,14 +45,14 @@ class OutboxSyncer(
         if (job?.isActive == true) return
         job = scope.launch {
             while (true) {
-                trigger.first()
+                trigger.receive()
                 runSyncCycle()
             }
         }
     }
 
     fun requestSync() {
-        trigger.tryEmit(Unit)
+        trigger.trySend(Unit)
     }
 
     suspend fun dispatchEventNow(event: PendingEvent) {
@@ -65,6 +65,12 @@ class OutboxSyncer(
             batchId?.takeIf { it.isNotEmpty() }?.let { id ->
                 database.markBatchConfirmed(id)
                 database.markTelemetryConfirmedByBatch(id)
+                runCatching {
+                    dataClient.deleteDataItems(
+                        Uri.parse("wear://*" + BackendEndpointContract.telemetryPath(id)),
+                        DataClient.FILTER_LITERAL,
+                    ).awaitResult()
+                }
             }
             eventId?.takeIf { it.isNotEmpty() }?.let { database.markEventConfirmed(it) }
             sosCancelEventId?.takeIf { it.isNotEmpty() }?.let { database.markEventConfirmed(it) }
@@ -158,12 +164,18 @@ class OutboxSyncer(
     }
 
     private suspend fun sendNewTelemetryBatches(node: Node): Boolean {
-        val pending = database.pendingTelemetry(MAX_TELEMETRY_PER_BATCH)
+        var limit = MAX_TELEMETRY_PER_BATCH
+        var pending = database.pendingTelemetry(limit)
         if (pending.isEmpty()) return false
         val batchId = UUID.randomUUID().toString()
-        val payload = BackendEndpointContract.telemetryEnvelope(batchId, pending).toString()
+        var payload = BackendEndpointContract.telemetryEnvelope(batchId, pending).toString()
+        while (payload.toByteArray().size > MAX_BATCH_BYTES && limit > 1) {
+            limit = (limit / 2).coerceAtLeast(1)
+            pending = database.pendingTelemetry(limit)
+            payload = BackendEndpointContract.telemetryEnvelope(batchId, pending).toString()
+        }
         if (payload.toByteArray().size > MAX_BATCH_BYTES) {
-            database.markTelemetryFailed(pending.map { it.id })
+            database.markTelemetryFailed(listOf(pending.single().id))
             return false
         }
         val route = BackendEndpointContract.telemetryPath(batchId)

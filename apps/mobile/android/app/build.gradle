@@ -80,11 +80,13 @@ android {
 
     namespace "com.anxietywatch.mobile"
     defaultConfig {
-        applicationId "com.anxietywatch.mobile"
+        // Wear Data Layer requiere el mismo applicationId que apps/wear.
+        applicationId "com.anxietywatch.wear"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {
         debug {
@@ -122,6 +124,11 @@ dependencies {
 
     // JWT persistente cifrado con una clave administrada por Android Keystore.
     implementation("androidx.security:security-crypto:1.1.0")
+
+    androidTestImplementation("androidx.room:room-testing:2.7.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:core:1.6.1")
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")
