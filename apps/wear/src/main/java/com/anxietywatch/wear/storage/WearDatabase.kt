@@ -38,6 +38,11 @@ data class StoredBatch(
     val remoteAck: Boolean,
 )
 
+data class StoredEventOperation(
+    val kind: String,
+    val event: PendingEvent,
+)
+
 class WearDatabase(context: Context) : SQLiteOpenHelper(
     context,
     DATABASE_NAME,
@@ -77,7 +82,8 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
         db.execSQL(
             """
             CREATE TABLE events (
-                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                id TEXT NOT NULL,
                 started_at INTEGER NOT NULL,
                 ended_at INTEGER,
                 state TEXT NOT NULL,
@@ -88,10 +94,12 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
                 sync_state TEXT NOT NULL DEFAULT 'QUEUED',
                 attempts INTEGER NOT NULL DEFAULT 0,
                 next_attempt_at INTEGER NOT NULL DEFAULT 0,
-                remote_ack INTEGER NOT NULL DEFAULT 0
+                remote_ack INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (kind, id)
             )
             """.trimIndent(),
         )
+        db.execSQL("CREATE INDEX events_sync_idx ON events(sync_state, next_attempt_at)")
         db.execSQL(
             """
             CREATE TABLE baseline (
@@ -158,6 +166,46 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
             db.execSQL("UPDATE sync_batches SET state = 'SENT' WHERE state IN ('sent', 'queued')")
             db.execSQL("UPDATE sync_batches SET state = 'CONFIRMED' WHERE state = 'confirmed'")
             db.execSQL("UPDATE sync_batches SET state = 'FAILED' WHERE state = 'failed'")
+        }
+        if (oldVersion < 4) {
+            db.execSQL(
+                """
+                CREATE TABLE events_v4 (
+                    kind TEXT NOT NULL,
+                    id TEXT NOT NULL,
+                    started_at INTEGER NOT NULL,
+                    ended_at INTEGER,
+                    state TEXT NOT NULL,
+                    trigger_score REAL NOT NULL,
+                    rules_version TEXT NOT NULL,
+                    user_response TEXT,
+                    sos_status TEXT,
+                    sync_state TEXT NOT NULL DEFAULT 'QUEUED',
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at INTEGER NOT NULL DEFAULT 0,
+                    remote_ack INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (kind, id)
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                INSERT INTO events_v4 (
+                    kind, id, started_at, ended_at, state, trigger_score,
+                    rules_version, user_response, sos_status, sync_state,
+                    attempts, next_attempt_at, remote_ack
+                )
+                SELECT
+                    CASE WHEN user_response = 'SOS_CANCELLED' THEN 'sos-cancel' ELSE 'sos' END,
+                    id, started_at, ended_at, state, trigger_score,
+                    rules_version, user_response, sos_status, sync_state,
+                    attempts, next_attempt_at, remote_ack
+                FROM events
+                """.trimIndent(),
+            )
+            db.execSQL("DROP TABLE events")
+            db.execSQL("ALTER TABLE events_v4 RENAME TO events")
+            db.execSQL("CREATE INDEX events_sync_idx ON events(sync_state, next_attempt_at)")
         }
     }
 
@@ -319,12 +367,10 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
 
     @Synchronized
     fun upsertEvent(event: PendingEvent) {
-        val existing = eventSyncState(event.id)
-        // Una cancelación debe salir siempre, aunque el evento SOS ya esté
-        // SENT/CONFIRMED: se re-encola a QUEUED para que la cancelación llegue
-        // al teléfono. Sin esto, pendingEvents() (QUEUED/FAILED) nunca la vería.
-        val cancelled = event.userResponse == UserResponse.SOS_CANCELLED
+        val kind = eventKind(event)
+        val existing = eventSyncState(kind, event.id)
         val values = ContentValues().apply {
+            put("kind", kind)
             put("id", event.id)
             put("started_at", event.startedAtEpochMillis)
             event.endedAtEpochMillis?.let { put("ended_at", it) }
@@ -333,15 +379,9 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
             put("rules_version", event.rulesVersion)
             event.userResponse?.let { put("user_response", it.name) }
             event.sosStatus?.let { put("sos_status", it) }
-            if (cancelled) {
-                put("sync_state", SyncState.QUEUED.name)
-                put("attempts", 0)
-                put("next_attempt_at", 0L)
-            } else {
-                put("sync_state", existing?.first ?: SyncState.QUEUED.name)
-                put("attempts", existing?.second ?: 0)
-                put("next_attempt_at", existing?.third ?: 0L)
-            }
+            put("sync_state", existing?.first ?: SyncState.QUEUED.name)
+            put("attempts", existing?.second ?: 0)
+            put("next_attempt_at", existing?.third ?: 0L)
         }
         writableDatabase.insertWithOnConflict(
             "events",
@@ -352,12 +392,12 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
     }
 
     @Synchronized
-    private fun eventSyncState(eventId: String): Triple<String, Int, Long>? =
+    private fun eventSyncState(kind: String, eventId: String): Triple<String, Int, Long>? =
         readableDatabase.query(
             "events",
             arrayOf("sync_state", "attempts", "next_attempt_at"),
-            "id = ?",
-            arrayOf(eventId),
+            "kind = ? AND id = ?",
+            arrayOf(kind, eventId),
             null,
             null,
             null,
@@ -370,10 +410,10 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
         }
 
     @Synchronized
-    fun pendingEvents(now: Long): List<PendingEvent> = readableDatabase.query(
+    fun pendingEvents(now: Long): List<StoredEventOperation> = readableDatabase.query(
         "events",
         arrayOf(
-            "id", "started_at", "ended_at", "state", "trigger_score",
+            "kind", "id", "started_at", "ended_at", "state", "trigger_score",
             "rules_version", "user_response", "sos_status", "attempts", "next_attempt_at",
         ),
         "sync_state IN (?, ?) AND next_attempt_at <= ?",
@@ -382,51 +422,54 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
         null,
         "started_at ASC",
     ).use { cursor ->
-        val rows = mutableListOf<PendingEvent>()
+        val rows = mutableListOf<StoredEventOperation>()
         while (cursor.moveToNext()) {
-            rows += PendingEvent(
-                id = cursor.getString(0),
-                startedAtEpochMillis = cursor.getLong(1),
-                endedAtEpochMillis = cursor.getLong(2).takeIf { !cursor.isNull(2) },
-                state = MonitoringState.valueOf(cursor.getString(3)),
-                triggerScore = cursor.getDouble(4),
-                rulesVersion = cursor.getString(5),
-                userResponse = cursor.getString(6)?.let { UserResponse.valueOf(it) },
-                sosStatus = cursor.getString(7),
-                attempts = cursor.getInt(8),
-                nextAttemptAt = cursor.getLong(9),
+            rows += StoredEventOperation(
+                kind = cursor.getString(0),
+                event = PendingEvent(
+                    id = cursor.getString(1),
+                    startedAtEpochMillis = cursor.getLong(2),
+                    endedAtEpochMillis = cursor.getLong(3).takeIf { !cursor.isNull(3) },
+                    state = MonitoringState.valueOf(cursor.getString(4)),
+                    triggerScore = cursor.getDouble(5),
+                    rulesVersion = cursor.getString(6),
+                    userResponse = cursor.getString(7)?.let { UserResponse.valueOf(it) },
+                    sosStatus = cursor.getString(8),
+                    attempts = cursor.getInt(9),
+                    nextAttemptAt = cursor.getLong(10),
+                ),
             )
         }
         rows
     }
 
     @Synchronized
-    fun markEventSent(eventId: String, attempts: Int, nextAttemptAt: Long) {
+    fun markEventSent(kind: String, eventId: String, attempts: Int, nextAttemptAt: Long) {
         val values = ContentValues().apply {
             put("sync_state", SyncState.SENT.name)
             put("attempts", attempts)
             put("next_attempt_at", nextAttemptAt)
         }
-        writableDatabase.update("events", values, "id = ?", arrayOf(eventId))
+        writableDatabase.update("events", values, "kind = ? AND id = ?", arrayOf(kind, eventId))
     }
 
     @Synchronized
-    fun markEventConfirmed(eventId: String) {
+    fun markEventConfirmed(kind: String, eventId: String) {
         val values = ContentValues().apply {
             put("sync_state", SyncState.CONFIRMED.name)
             put("remote_ack", 1)
         }
-        writableDatabase.update("events", values, "id = ?", arrayOf(eventId))
+        writableDatabase.update("events", values, "kind = ? AND id = ?", arrayOf(kind, eventId))
     }
 
     @Synchronized
-    fun markEventFailed(eventId: String, attempts: Int, nextAttemptAt: Long) {
+    fun markEventFailed(kind: String, eventId: String, attempts: Int, nextAttemptAt: Long) {
         val values = ContentValues().apply {
             put("sync_state", SyncState.FAILED.name)
             put("attempts", attempts)
             put("next_attempt_at", nextAttemptAt)
         }
-        writableDatabase.update("events", values, "id = ?", arrayOf(eventId))
+        writableDatabase.update("events", values, "kind = ? AND id = ?", arrayOf(kind, eventId))
     }
 
     @Synchronized
@@ -512,11 +555,16 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DATABASE_NAME = "anxietywatch-wear.db"
-        private const val DATABASE_VERSION = 3
+        const val EVENT_KIND_SOS = "sos"
+        const val EVENT_KIND_SOS_CANCEL = "sos-cancel"
+        private const val DATABASE_VERSION = 4
         private const val BASELINE_NAME = "heart-rate-v1"
         private const val MAX_ROWS = 10_000
         private const val SEVEN_DAYS_MILLIS = 7L * 24 * 60 * 60 * 1000
     }
+
+    private fun eventKind(event: PendingEvent): String =
+        if (event.userResponse == UserResponse.SOS_CANCELLED) EVENT_KIND_SOS_CANCEL else EVENT_KIND_SOS
 }
 
 private fun SensorReading.typeName(): String = when (this) {

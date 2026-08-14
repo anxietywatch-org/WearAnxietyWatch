@@ -72,8 +72,12 @@ class OutboxSyncer(
                     ).awaitResult()
                 }
             }
-            eventId?.takeIf { it.isNotEmpty() }?.let { database.markEventConfirmed(it) }
-            sosCancelEventId?.takeIf { it.isNotEmpty() }?.let { database.markEventConfirmed(it) }
+            eventId?.takeIf { it.isNotEmpty() }?.let {
+                database.markEventConfirmed(WearDatabase.EVENT_KIND_SOS, it)
+            }
+            sosCancelEventId?.takeIf { it.isNotEmpty() }?.let {
+                database.markEventConfirmed(WearDatabase.EVENT_KIND_SOS_CANCEL, it)
+            }
             requestSync()
         }
     }
@@ -114,8 +118,9 @@ class OutboxSyncer(
     private suspend fun sendPendingEvents(node: Node): Boolean {
         val now = System.currentTimeMillis()
         val pending = database.pendingEvents(now)
-        for (event in pending) {
-            val cancelled = event.userResponse == com.anxietywatch.wear.domain.UserResponse.SOS_CANCELLED
+        for (operation in pending) {
+            val event = operation.event
+            val cancelled = operation.kind == WearDatabase.EVENT_KIND_SOS_CANCEL
             val route = if (cancelled) {
                 BackendEndpointContract.sosCancelPath(event.id)
             } else {
@@ -131,10 +136,10 @@ class OutboxSyncer(
             try {
                 messageClient.sendMessage(node.id, route, bytes).awaitResult()
                 val attempt = event.attempts + 1
-                database.markEventSent(event.id, attempt, now + backoffMillis(attempt))
+                database.markEventSent(operation.kind, event.id, attempt, now + backoffMillis(attempt))
             } catch (e: Exception) {
                 val attempt = event.attempts + 1
-                database.markEventFailed(event.id, attempt, now + backoffMillis(attempt))
+                database.markEventFailed(operation.kind, event.id, attempt, now + backoffMillis(attempt))
             }
         }
         return database.pendingEvents(now).isNotEmpty()

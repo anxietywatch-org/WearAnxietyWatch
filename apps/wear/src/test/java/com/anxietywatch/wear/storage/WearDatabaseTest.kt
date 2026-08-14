@@ -80,10 +80,10 @@ class WearDatabaseTest {
             rulesVersion = "rules-v2",
         )
         db.upsertEvent(event)
-        assertTrue(db.pendingEvents(now = Long.MAX_VALUE).any { it.id == event.id })
+        assertTrue(db.pendingEvents(now = Long.MAX_VALUE).any { it.event.id == event.id })
 
-        db.markEventConfirmed(event.id)
-        assertTrue(db.pendingEvents(now = Long.MAX_VALUE).none { it.id == event.id })
+        db.markEventConfirmed(WearDatabase.EVENT_KIND_SOS, event.id)
+        assertTrue(db.pendingEvents(now = Long.MAX_VALUE).none { it.event.id == event.id })
     }
 
     @Test
@@ -106,8 +106,8 @@ class WearDatabaseTest {
         assertTrue(db.pendingBatches(now = Long.MAX_VALUE).none { it.batchId == "batch-1" })
     }
 
-@Test
-    fun `sent sos event is requeued when cancelled so the cancel reaches the phone`() {
+    @Test
+    fun `sos and cancellation coexist and are acknowledged independently`() {
         val event = PendingEvent(
             startedAtEpochMillis = 1_000L,
             state = MonitoringState.SOS_ACTIVE,
@@ -115,8 +115,13 @@ class WearDatabaseTest {
             rulesVersion = "rules-v2",
         )
         db.upsertEvent(event)
-        db.markEventSent(event.id, attempts = 1, nextAttemptAt = Long.MAX_VALUE)
-        assertTrue(db.pendingEvents(now = Long.MAX_VALUE).none { it.id == event.id })
+        db.markEventSent(
+            WearDatabase.EVENT_KIND_SOS,
+            event.id,
+            attempts = 1,
+            nextAttemptAt = Long.MAX_VALUE,
+        )
+        assertTrue(db.pendingEvents(now = Long.MAX_VALUE).none { it.event.id == event.id })
 
         val cancelled = event.copy(
             state = MonitoringState.RESOLVED,
@@ -125,17 +130,30 @@ class WearDatabaseTest {
         )
         db.upsertEvent(cancelled)
 
-        val pending = db.pendingEvents(now = Long.MAX_VALUE).first { it.id == event.id }
+        val pending = db.pendingEvents(now = Long.MAX_VALUE)
+            .first { it.kind == WearDatabase.EVENT_KIND_SOS_CANCEL && it.event.id == event.id }
         assertEquals(
             com.anxietywatch.wear.domain.UserResponse.SOS_CANCELLED,
-            pending.userResponse,
+            pending.event.userResponse,
         )
-        assertEquals(2_000L, pending.endedAtEpochMillis)
+        assertEquals(2_000L, pending.event.endedAtEpochMillis)
+        val operationCount = db.readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM events WHERE id = ?",
+            arrayOf(event.id),
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else 0 }
+        assertEquals(2, operationCount)
+
+        db.markEventConfirmed(WearDatabase.EVENT_KIND_SOS_CANCEL, event.id)
+        val sosState = db.readableDatabase.rawQuery(
+            "SELECT sync_state FROM events WHERE kind = ? AND id = ?",
+            arrayOf(WearDatabase.EVENT_KIND_SOS, event.id),
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+        assertEquals(SyncState.SENT.name, sosState)
     }
 
     @Test
     fun `migration v3 normalizes lowercase sync states to enum names`() {
-        // 1. Crear el esquema actual (v3) con el código de la app.
+        // 1. Crear el esquema actual (v4) con el código de la app.
         val seed = WearDatabase(ApplicationProvider.getApplicationContext<Context>())
         seed.writableDatabase
         seed.close()
@@ -157,7 +175,7 @@ class WearDatabaseTest {
             raw.execSQL("UPDATE events SET sync_state = 'queued'")
         }
 
-        // 3. Reabrir: la migración v3 debe normalizar a mayúsculas.
+        // 3. Reabrir: v3 normaliza estados y v4 conserva las filas al añadir kind.
         val reopened = WearDatabase(ApplicationProvider.getApplicationContext<Context>())
         val pending = reopened.pendingTelemetry(10)
         assertEquals(1, pending.size)
