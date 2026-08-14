@@ -1,5 +1,6 @@
 package com.anxietywatch.mobile.fog.room
 
+import android.app.Application
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -15,7 +16,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], manifest = Config.NONE)
+@Config(sdk = [35], manifest = Config.NONE, application = Application::class)
 class FogLegacyQueueMigrationTest {
     private lateinit var context: Context
     private lateinit var database: FogDatabase
