@@ -22,7 +22,12 @@ class FogSecureStore private constructor(
         prefs = encryptedPrefs(context.applicationContext),
     )
 
-    internal constructor(context: Context, prefs: SharedPreferences) : this(
+    internal constructor(
+        context: Context,
+        prefs: SharedPreferences,
+        /** Marker to distinguish from primary constructor JVM signature. */
+        testMode: Boolean = true,
+    ) : this(
         appContext = context.applicationContext,
         prefs = prefs,
     )
