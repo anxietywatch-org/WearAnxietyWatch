@@ -9,7 +9,7 @@ import {
   useColorScheme,
   View,
 } from 'react-native';
-import { login, logout } from './src/fog/auth';
+import { acceptByCode, login, logout } from './src/fog/auth';
 import { BASE_URL, fogNode } from './src/fog/fogNode';
 import type { FogNodeState } from './src/fog/fogNode';
 
@@ -20,6 +20,7 @@ function App() {
   const [submitting, setSubmitting] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [code, setCode] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -68,6 +69,32 @@ function App() {
       // El cierre local sigue siendo efectivo aunque el API esté sin conexión.
     } finally {
       await fogNode.clearAuthentication();
+      setSubmitting(false);
+    }
+  }
+
+  async function handleLinkCode() {
+    if (!code.trim() || !state?.token) {
+      setError('Escribe el código de vinculación.');
+      return;
+    }
+    setSubmitting(true);
+    setError('');
+    try {
+      const auth = await acceptByCode(
+        code.trim(),
+        state.identity.deviceId,
+        state.token,
+      );
+      await fogNode.setAuthenticated(auth);
+      setCode('');
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : 'El código no fue aceptado.',
+      );
+    } finally {
       setSubmitting(false);
     }
   }
@@ -167,6 +194,33 @@ function App() {
               </Text>
             </View>
             {error ? <Text style={styles.error}>{error}</Text> : null}
+            <Text style={styles.codeLabel}>
+              Código de vinculación (web → Tokens)
+            </Text>
+            <TextInput
+              autoCapitalize="characters"
+              autoCorrect={false}
+              onChangeText={setCode}
+              onSubmitEditing={() => void handleLinkCode()}
+              placeholder="AW-XXXX-XXXX-XXXX"
+              placeholderTextColor="#70847E"
+              style={styles.input}
+              value={code}
+            />
+            <Pressable
+              disabled={submitting || !code.trim()}
+              onPress={() => void handleLinkCode()}
+              style={({ pressed }) => [
+                styles.primaryButton,
+                (pressed || submitting) && styles.buttonDisabled,
+              ]}
+            >
+              {submitting ? (
+                <ActivityIndicator color="#0D1715" />
+              ) : (
+                <Text style={styles.primaryButtonText}>Vincular por código</Text>
+              )}
+            </Pressable>
             <Pressable
               disabled={submitting}
               onPress={() => void handleLogout()}
@@ -238,6 +292,12 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   error: { color: '#FF9D9D', fontSize: 14, marginTop: 12 },
+  codeLabel: {
+    color: '#89A39B',
+    fontSize: 12,
+    textTransform: 'uppercase',
+    marginTop: 14,
+  },
   primaryButton: {
     alignItems: 'center',
     backgroundColor: '#9FE0C8',

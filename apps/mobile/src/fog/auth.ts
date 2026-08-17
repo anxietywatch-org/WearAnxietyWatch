@@ -104,3 +104,28 @@ export async function logout(token: string): Promise<void> {
     await clearPersistedAuth();
   }
 }
+
+/**
+ * Acepta un código de vinculación generado en el web (dashboard → Tokens) para
+ * este dispositivo. El API devuelve una sesión nueva (mismo shape que login).
+ */
+export async function acceptByCode(
+  code: string,
+  deviceId: string,
+  token: string,
+): Promise<AuthResult> {
+  const response = await fetch(
+    `${FogEndpoints.API_BASE}/api/tokens/accept-by-code`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ code: code.trim().toUpperCase(), deviceId }),
+    },
+  );
+  const auth = await readResponse(response);
+  await persistAuth(auth);
+  return auth;
+}
