@@ -19,8 +19,8 @@ import org.json.JSONObject
  *
  *  - `peek()`: recoge los sobres pendientes del reloj.
  *  - `complete()`: elimina un sobre de la cola tras entregarlo.
- *  - `ackTelemetry()` / `ackSos()` / `ackSosCancel()`: confirman entrega al reloj
- *    por identificador (`/fog/v1/ack/telemetry/{id}`, ...).
+ *  - `ackTelemetry()` / `ackSos()` / `ackSosCancel()` / `ackSuspected()` / `ackDecision()`:
+ *    confirman entrega al reloj por identificador (`/fog/v1/ack/...`).
  *  - `announceFogPhone()`: anuncia al reloj el protocolo fog del teléfono.
  *  - `getIdentity()` / `setIdentity()` / `nextSequence()`: identidad fog persistente.
  */
@@ -151,6 +151,16 @@ class WearFogModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun ackSosCancel(eventId: String, promise: Promise) {
         sendAckToWear(reactContext, WearFogListenerService.ACK_SOS_CANCEL_PREFIX + eventId, promise)
+    }
+
+    @ReactMethod
+    fun ackSuspected(eventId: String, promise: Promise) {
+        sendAckToWear(reactContext, WearFogListenerService.ACK_SUSPECTED_PREFIX + eventId, promise)
+    }
+
+    @ReactMethod
+    fun ackDecision(eventId: String, promise: Promise) {
+        sendAckToWear(reactContext, WearFogListenerService.ACK_DECISION_PREFIX + eventId, promise)
     }
 
     @ReactMethod

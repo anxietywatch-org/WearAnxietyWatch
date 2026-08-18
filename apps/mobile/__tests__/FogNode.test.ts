@@ -23,6 +23,8 @@ jest.mock('react-native', () => {
     ackTelemetry: jest.fn().mockResolvedValue(true),
     ackSos: jest.fn().mockResolvedValue(true),
     ackSosCancel: jest.fn().mockResolvedValue(true),
+    ackSuspected: jest.fn().mockResolvedValue(true),
+    ackDecision: jest.fn().mockResolvedValue(true),
     getAuth: jest.fn().mockResolvedValue(''),
     setAuth: jest.fn().mockResolvedValue(true),
     clearAuth: jest.fn().mockResolvedValue(true),
@@ -90,6 +92,8 @@ beforeEach(async () => {
   WearFog.ackTelemetry.mockResolvedValue(true);
   WearFog.ackSos.mockResolvedValue(true);
   WearFog.ackSosCancel.mockResolvedValue(true);
+  WearFog.ackSuspected.mockResolvedValue(true);
+  WearFog.ackDecision.mockResolvedValue(true);
   WearFog.setAuth.mockResolvedValue(true);
   WearFog.clearAuth.mockResolvedValue(true);
   WearFog.getToken.mockResolvedValue('');
@@ -230,6 +234,39 @@ describe('fogNode flush', () => {
     expect(WearFog.ackSosCancel).toHaveBeenCalledWith('event-1');
     expect(WearFog.complete).toHaveBeenCalledWith('sos:event-1');
     expect(WearFog.complete).toHaveBeenCalledWith('sos-cancel:event-1');
+  });
+
+  it('suspected y decision se entregan y confirman por sus ACK', async () => {
+    WearFog.peek.mockResolvedValue(
+      JSON.stringify([
+        entry('suspected', 'suspected:evt-1'),
+        entry('decision', 'decision:evt-1'),
+      ]),
+    );
+    mockDeliver('accepted');
+
+    await flushOnce();
+
+    expect(deliverEntry).toHaveBeenCalledTimes(2);
+    expect(WearFog.markCloudAcked).toHaveBeenCalledWith('suspected:evt-1');
+    expect(WearFog.markCloudAcked).toHaveBeenCalledWith('decision:evt-1');
+    expect(WearFog.ackSuspected).toHaveBeenCalledWith('evt-1');
+    expect(WearFog.ackDecision).toHaveBeenCalledWith('evt-1');
+    expect(WearFog.complete).toHaveBeenCalledWith('suspected:evt-1');
+    expect(WearFog.complete).toHaveBeenCalledWith('decision:evt-1');
+  });
+
+  it('suspected no es descartado como kind desconocido', async () => {
+    WearFog.peek.mockResolvedValue(
+      JSON.stringify([entry('suspected', 'suspected:evt-1')]),
+    );
+    mockDeliver('accepted');
+
+    await flushOnce();
+
+    expect(deliverEntry).toHaveBeenCalledTimes(1);
+    expect(WearFog.complete).not.toHaveBeenCalledWith('mystery:x');
+    expect(WearFog.ackSuspected).toHaveBeenCalledWith('evt-1');
   });
 
   it('reinicio sin token: no envía al API y marca unauthorized si hay pendientes', async () => {

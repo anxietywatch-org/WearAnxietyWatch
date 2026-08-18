@@ -3,11 +3,15 @@ package com.anxietywatch.wear.storage
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.anxietywatch.wear.domain.BaselineSnapshot
+import com.anxietywatch.wear.domain.DerivedFeatures
 import com.anxietywatch.wear.domain.MonitoringState
 import com.anxietywatch.wear.domain.PendingEvent
 import com.anxietywatch.wear.domain.SensorReading
+import com.anxietywatch.wear.domain.UserResponse
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -79,7 +83,7 @@ class WearDatabaseTest {
             triggerScore = 0.9,
             rulesVersion = "rules-v2",
         )
-        db.upsertEvent(event)
+        db.upsertSosEvent(event)
         assertTrue(db.pendingEvents(now = Long.MAX_VALUE).any { it.event.id == event.id })
 
         db.markEventConfirmed(WearDatabase.EVENT_KIND_SOS, event.id)
@@ -114,7 +118,7 @@ class WearDatabaseTest {
             triggerScore = 0.9,
             rulesVersion = "rules-v2",
         )
-        db.upsertEvent(event)
+db.upsertSosEvent(event)
         db.markEventSent(
             WearDatabase.EVENT_KIND_SOS,
             event.id,
@@ -128,7 +132,7 @@ class WearDatabaseTest {
             userResponse = com.anxietywatch.wear.domain.UserResponse.SOS_CANCELLED,
             endedAtEpochMillis = 2_000L,
         )
-        db.upsertEvent(cancelled)
+db.upsertSosCancelEvent(cancelled)
 
         val pending = db.pendingEvents(now = Long.MAX_VALUE)
             .first { it.kind == WearDatabase.EVENT_KIND_SOS_CANCEL && it.event.id == event.id }
@@ -149,6 +153,178 @@ class WearDatabaseTest {
             arrayOf(WearDatabase.EVENT_KIND_SOS, event.id),
         ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
         assertEquals(SyncState.SENT.name, sosState)
+    }
+
+    @Test
+    fun `suspected detection is persisted and delivered as suspected, not sos`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.88,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        val pending = db.pendingEvents(now = Long.MAX_VALUE).first { it.event.id == event.id }
+        assertEquals(WearDatabase.EVENT_KIND_SUSPECTED, pending.kind)
+        assertEquals(MonitoringState.USER_VALIDATION, pending.event.state)
+
+        val sosRows = db.readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM events WHERE kind = ? AND id = ?",
+            arrayOf(WearDatabase.EVENT_KIND_SOS, event.id),
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else -1 }
+        assertEquals(0, sosRows)
+    }
+
+    @Test
+    fun `primary decision and suspected rows coexist for same event id`() {
+        val event = PendingEvent(
+            id = "shared-id",
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.INTERVENTION,
+            triggerScore = 0.88,
+            rulesVersion = "rules-v2",
+            userResponse = UserResponse.SUPPORT_REQUESTED,
+            endedAtEpochMillis = 2_000L,
+        )
+        db.upsertSuspectedEvent(event)
+        db.upsertDecisionEvent(event)
+
+        val pending = db.pendingEvents(now = Long.MAX_VALUE)
+            .filter { it.event.id == "shared-id" }
+        assertEquals(2, pending.size)
+        assertTrue(pending.any { it.kind == WearDatabase.EVENT_KIND_SUSPECTED })
+        assertTrue(pending.any { it.kind == WearDatabase.EVENT_KIND_DECISION })
+        val decision = pending.first { it.kind == WearDatabase.EVENT_KIND_DECISION }.event
+        assertEquals(UserResponse.SUPPORT_REQUESTED, decision.userResponse)
+    }
+
+    @Test
+    fun `primary decision is not overwritten by a later activity response`() {
+        val event = PendingEvent(
+            id = "shared-id",
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.INTERVENTION,
+            triggerScore = 0.88,
+            rulesVersion = "rules-v2",
+            userResponse = UserResponse.SUPPORT_REQUESTED,
+            endedAtEpochMillis = 2_000L,
+        )
+        db.upsertSuspectedEvent(event)
+        db.upsertDecisionEvent(event)
+
+        val later = event.copy(
+            state = MonitoringState.RESOLVED,
+            userResponse = UserResponse.BREATHING_HELPED,
+            endedAtEpochMillis = 5_000L,
+        )
+        db.upsertSuspectedEvent(later)
+
+        val decision = db.pendingEvents(now = Long.MAX_VALUE)
+            .first { it.kind == WearDatabase.EVENT_KIND_DECISION && it.event.id == "shared-id" }
+            .event
+        assertEquals(UserResponse.SUPPORT_REQUESTED, decision.userResponse)
+
+        val suspected = db.pendingEvents(now = Long.MAX_VALUE)
+            .first { it.kind == WearDatabase.EVENT_KIND_SUSPECTED && it.event.id == "shared-id" }
+            .event
+        assertEquals(UserResponse.BREATHING_HELPED, suspected.userResponse)
+    }
+
+    @Test
+    fun `suspected event round-trips features and baseline snapshot`() {
+        val event = PendingEvent(
+            id = "snapshot-id",
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.88,
+            rulesVersion = "rules-v2",
+            features = DerivedFeatures(
+                heartRateMean = 96.0,
+                heartRateMax = 108.0,
+                heartRateSlopeBpmPerMinute = 1.2,
+                heartRateDeltaFromBaseline = 12.0,
+                rmssdMillis = 21.0,
+                sdnnMillis = 30.0,
+                movementMagnitudeMean = 0.05,
+                movementVariance = 0.0004,
+                validSampleRatio = 0.95,
+                lastSampleAgeSeconds = 5L,
+                sampleCount = 60,
+            ),
+            baseline = BaselineSnapshot(
+                sampleCount = 240L,
+                meanHeartRate = 82.0,
+                heartRateM2 = 310.0,
+                updatedAtEpochMillis = 900L,
+            ),
+        )
+        db.upsertSuspectedEvent(event)
+
+        val restored = db.pendingEvents(now = Long.MAX_VALUE)
+            .first { it.kind == WearDatabase.EVENT_KIND_SUSPECTED && it.event.id == "snapshot-id" }
+            .event
+        assertEquals(96.0, restored.features?.heartRateMean, 0.001)
+        assertEquals(12.0, restored.features?.heartRateDeltaFromBaseline, 0.001)
+        assertEquals(60, restored.features?.sampleCount)
+        assertEquals(240L, restored.baseline?.sampleCount)
+        assertEquals(82.0, restored.baseline?.meanHeartRate, 0.001)
+        assertEquals(310.0, restored.baseline?.heartRateM2, 0.001)
+        assertEquals(900L, restored.baseline?.updatedAtEpochMillis)
+    }
+
+    @Test
+    fun `suspected and decision are acknowledged independently of sos`() {
+        val event = PendingEvent(
+            id = "shared-id",
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.88,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+        db.upsertDecisionEvent(event.copy(userResponse = UserResponse.USER_OK, endedAtEpochMillis = 2_000L))
+
+        db.markEventConfirmed(WearDatabase.EVENT_KIND_SUSPECTED, event.id)
+        val remaining = db.pendingEvents(now = Long.MAX_VALUE)
+            .filter { it.event.id == "shared-id" }
+        assertEquals(1, remaining.size)
+        assertEquals(WearDatabase.EVENT_KIND_DECISION, remaining.single().kind)
+
+        db.markEventConfirmed(WearDatabase.EVENT_KIND_DECISION, event.id)
+        assertTrue(db.pendingEvents(now = Long.MAX_VALUE).none { it.event.id == "shared-id" })
+    }
+
+    @Test
+    fun `migration v4 keeps events and adds detection snapshot columns`() {
+        val seed = WearDatabase(ApplicationProvider.getApplicationContext<Context>())
+        seed.writableDatabase
+        seed.close()
+
+        val path = ApplicationProvider
+            .getApplicationContext<Context>()
+            .getDatabasePath("anxietywatch-wear.db")
+        android.database.sqlite.SQLiteDatabase.openDatabase(
+            path.path,
+            null,
+            android.database.sqlite.SQLiteDatabase.OPEN_READWRITE,
+        ).use { raw ->
+            raw.execSQL("PRAGMA user_version = 4")
+            raw.execSQL(
+                "INSERT INTO events (kind, id, started_at, ended_at, state, trigger_score, rules_version, user_response, sos_status, sync_state, attempts, next_attempt_at, remote_ack) " +
+                    "VALUES ('sos', 'legacy-1', 1000, 2000, 'SOS_ACTIVE', 0.9, 'rules-v2', NULL, 'queued_on_watch', 'QUEUED', 0, 0, 0)",
+            )
+        }
+
+        val reopened = WearDatabase(ApplicationProvider.getApplicationContext<Context>())
+        val restored = reopened.pendingEvents(now = Long.MAX_VALUE)
+            .first { it.kind == WearDatabase.EVENT_KIND_SOS && it.event.id == "legacy-1" }
+            .event
+        assertEquals("rules-v2", restored.rulesVersion)
+        assertNull(restored.features)
+        assertNull(restored.baseline)
+        reopened.close()
+        db = WearDatabase(ApplicationProvider.getApplicationContext<Context>())
     }
 
     @Test

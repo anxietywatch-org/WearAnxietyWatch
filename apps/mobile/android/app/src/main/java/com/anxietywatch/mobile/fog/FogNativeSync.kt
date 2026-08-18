@@ -33,7 +33,7 @@ object FogNativeSync {
         if (token.isBlank() || identity.optString("userId").isBlank()) return Outcome.PENDING
         val entries = dao.pending(clockMillis())
         for (entry in entries) {
-            if (entry.kind !in setOf("telemetry", "sos", "sos-cancel")) {
+            if (entry.kind !in setOf("telemetry", "sos", "sos-cancel", "suspected", "decision")) {
                 dao.delete(entry.kind, entry.entityId)
                 continue
             }
@@ -101,6 +101,29 @@ object FogNativeSync {
                     .put("deviceId", identity.optString("deviceId"))
                     .put("cancelledAt", iso(envelope.opt("cancelledAt") ?: envelope.opt("triggeredAt")) ?: return null)
                     .also { putReason(it, envelope) }
+            entry.kind == "suspected" && envelope.optString("targetEndpoint") == "/fog/v1/events/suspected" ->
+                "/api/v1/events/suspected" to JSONObject()
+                    .put("eventId", envelope.optString("eventId"))
+                    .put("userId", identity.optString("userId"))
+                    .put("deviceId", identity.optString("deviceId"))
+                    .put("sessionId", identity.optString("sessionId"))
+                    .put("sequence", identity.optLong("sequence", 0L))
+                    .put("detectedAt", iso(envelope.opt("detectedAt")) ?: return null)
+                    .put("state", envelope.optString("state"))
+                    .put("score", envelope.optDouble("score", 0.0))
+                    .put("rulesVersion", envelope.optString("rulesVersion"))
+                    .put("features", envelope.opt("features").takeUnless { it == JSONObject.NULL } ?: JSONObject.NULL)
+                    .put("baseline", envelope.opt("baseline").takeUnless { it == JSONObject.NULL } ?: JSONObject.NULL)
+            entry.kind == "decision" && envelope.optString("targetEndpoint") == "/fog/v1/events/decision" ->
+                "/api/v1/events/decision" to JSONObject()
+                    .put("eventId", envelope.optString("eventId"))
+                    .put("userId", identity.optString("userId"))
+                    .put("deviceId", identity.optString("deviceId"))
+                    .put("sessionId", identity.optString("sessionId"))
+                    .put("sequence", identity.optLong("sequence", 0L))
+                    .put("detectedAt", iso(envelope.opt("detectedAt")) ?: return null)
+                    .put("respondedAt", iso(envelope.opt("respondedAt")) ?: return null)
+                    .put("response", envelope.optString("response"))
             else -> null
         }
     }
@@ -153,6 +176,8 @@ object FogNativeSync {
     private fun ackRoute(entry: FogOutboxEntry) = when (entry.kind) {
         "telemetry" -> WearFogListenerService.ACK_TELEMETRY_PREFIX
         "sos" -> WearFogListenerService.ACK_SOS_PREFIX
+        "suspected" -> WearFogListenerService.ACK_SUSPECTED_PREFIX
+        "decision" -> WearFogListenerService.ACK_DECISION_PREFIX
         else -> WearFogListenerService.ACK_SOS_CANCEL_PREFIX
     } + entry.entityId
 

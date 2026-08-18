@@ -22,8 +22,10 @@ import kotlin.random.Random
  * Cola de salida con reintentos y confirmación por el teléfono.
  *
  * El reloj no realiza HTTP: entrega lotes de telemetría mediante DataClient en
- * `/fog/v1/telemetry/{batchId}` y eventos SOS (incluida su cancelación) mediante
- * MessageClient en `/fog/v1/sos/{eventId}` y `/fog/v1/sos/cancel/{eventId}`.
+ * `/fog/v1/telemetry/{batchId}` y eventos (SOS y su cancelación, detecciones
+ * sospechadas y decisiones del usuario) mediante MessageClient en las rutas
+ * `/fog/v1/sos/{eventId}`, `/fog/v1/sos/cancel/{eventId}`,
+ * `/fog/v1/events/suspected/{eventId}` y `/fog/v1/events/decision/{eventId}`.
  * El teléfono (nodo fog) enriquece el payload con la identidad autenticada y
  * llama al API. Cuando el teléfono confirma la entrega responde ACK por
  * identificador (`/fog/v1/ack/telemetry/{batchId}`, ...) y el estado pasa a CONFIRMED.
@@ -55,12 +57,18 @@ class OutboxSyncer(
         trigger.trySend(Unit)
     }
 
-    suspend fun dispatchEventNow(event: PendingEvent) {
-        database.upsertEvent(event)
+suspend fun dispatchEventNow(event: PendingEvent) {
+        database.upsertSosEvent(event)
         requestSync()
     }
 
-    fun handleAck(batchId: String? = null, eventId: String? = null, sosCancelEventId: String? = null) {
+    fun handleAck(
+        batchId: String? = null,
+        eventId: String? = null,
+        sosCancelEventId: String? = null,
+        suspectedEventId: String? = null,
+        decisionEventId: String? = null,
+    ) {
         scope.launch {
             batchId?.takeIf { it.isNotEmpty() }?.let { id ->
                 database.markBatchConfirmed(id)
@@ -77,6 +85,12 @@ class OutboxSyncer(
             }
             sosCancelEventId?.takeIf { it.isNotEmpty() }?.let {
                 database.markEventConfirmed(WearDatabase.EVENT_KIND_SOS_CANCEL, it)
+            }
+            suspectedEventId?.takeIf { it.isNotEmpty() }?.let {
+                database.markEventConfirmed(WearDatabase.EVENT_KIND_SUSPECTED, it)
+            }
+            decisionEventId?.takeIf { it.isNotEmpty() }?.let {
+                database.markEventConfirmed(WearDatabase.EVENT_KIND_DECISION, it)
             }
             requestSync()
         }
@@ -115,24 +129,23 @@ class OutboxSyncer(
         }
     }
 
-    private suspend fun sendPendingEvents(node: Node): Boolean {
+private suspend fun sendPendingEvents(node: Node): Boolean {
         val now = System.currentTimeMillis()
         val pending = database.pendingEvents(now)
         for (operation in pending) {
             val event = operation.event
-            val cancelled = operation.kind == WearDatabase.EVENT_KIND_SOS_CANCEL
-            val route = if (cancelled) {
-                BackendEndpointContract.sosCancelPath(event.id)
-            } else {
-                BackendEndpointContract.sosPath(event.id)
+            val (route, envelope) = when (operation.kind) {
+                WearDatabase.EVENT_KIND_SOS_CANCEL ->
+                    BackendEndpointContract.sosCancelPath(event.id) to BackendEndpointContract.sosCancelEnvelope(event)
+                WearDatabase.EVENT_KIND_SOS ->
+                    BackendEndpointContract.sosPath(event.id) to BackendEndpointContract.sosEnvelope(event)
+                WearDatabase.EVENT_KIND_SUSPECTED ->
+                    BackendEndpointContract.suspectedPath(event.id) to BackendEndpointContract.suspectedEventEnvelope(event)
+                WearDatabase.EVENT_KIND_DECISION ->
+                    BackendEndpointContract.decisionPath(event.id) to BackendEndpointContract.eventDecisionEnvelope(event)
+                else -> return true
             }
-            val bytes = (
-                if (cancelled) {
-                    BackendEndpointContract.sosCancelEnvelope(event)
-                } else {
-                    BackendEndpointContract.sosEnvelope(event)
-                }
-                ).toString().toByteArray(Charsets.UTF_8)
+            val bytes = envelope.toString().toByteArray(Charsets.UTF_8)
             try {
                 messageClient.sendMessage(node.id, route, bytes).awaitResult()
                 val attempt = event.attempts + 1

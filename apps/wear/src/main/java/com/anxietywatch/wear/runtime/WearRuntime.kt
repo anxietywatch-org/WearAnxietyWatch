@@ -68,6 +68,7 @@ class WearRuntime(context: Context) {
     private var monitoringJob: Job? = null
     private var statusJob: Job? = null
     private var activeEvent: PendingEvent? = null
+    private var activeEventKind: String? = null
     private val processing = AtomicBoolean(false)
 
     init {
@@ -151,11 +152,17 @@ class WearRuntime(context: Context) {
     }
 
     /**
-     * Confirma la entrega de un lote de telemetría y/o un evento (SOS) que el teléfono
-     * notificó por ACK por identificador (`/fog/v1/ack/...`).
+     * Confirma la entrega de un lote de telemetría y/o un evento (SOS, sospechado o decisión)
+     * que el teléfono notificó por ACK por identificador (`/fog/v1/ack/...`).
      */
-    fun handleAck(batchId: String? = null, eventId: String? = null, sosCancelEventId: String? = null) {
-        outbox.handleAck(batchId, eventId, sosCancelEventId)
+    fun handleAck(
+        batchId: String? = null,
+        eventId: String? = null,
+        sosCancelEventId: String? = null,
+        suspectedEventId: String? = null,
+        decisionEventId: String? = null,
+    ) {
+        outbox.handleAck(batchId, eventId, sosCancelEventId, suspectedEventId, decisionEventId)
     }
 
     fun navigate(screen: WearScreen) {
@@ -197,6 +204,7 @@ class WearRuntime(context: Context) {
 
     fun respond(response: UserResponse) {
         notifier.clearPossibleEvent()
+        persistPrimaryDecisionIfNeeded(response)
         val next = stateMachine.onUserResponse(response)
         updateActiveEvent(next, response)
         val screen = when (next) {
@@ -231,7 +239,8 @@ class WearRuntime(context: Context) {
             triggerScore = mutableState.value.detectionScore,
             rulesVersion = rulesConfig.version,
             sosStatus = "pending_confirmation",
-        ).also(database::upsertEvent)
+        ).also(database::upsertSosEvent)
+        activeEventKind = WearDatabase.EVENT_KIND_SOS
         stateMachine.onUserResponse(UserResponse.SOS_REQUESTED)
         mutableState.value = mutableState.value.copy(
             screen = WearScreen.SOS_COUNTDOWN,
@@ -249,7 +258,8 @@ class WearRuntime(context: Context) {
             triggerScore = mutableState.value.detectionScore,
             rulesVersion = rulesConfig.version,
         )
-        activeEvent = event.copy(state = next, sosStatus = "queued_on_watch").also(database::upsertEvent)
+        activeEvent = event.copy(state = next, sosStatus = "queued_on_watch").also(database::upsertSosEvent)
+        activeEventKind = WearDatabase.EVENT_KIND_SOS
         mutableState.value = mutableState.value.copy(
             screen = WearScreen.SOS_ACTIVE,
             monitoringState = next,
@@ -275,10 +285,11 @@ class WearRuntime(context: Context) {
             endedAtEpochMillis = System.currentTimeMillis(),
         ).also {
             it?.let { event ->
-                database.upsertEvent(event)
+                database.upsertSosCancelEvent(event)
                 outbox.requestSync()
             }
         }
+        activeEventKind = null
         stateMachine.onUserResponse(UserResponse.SOS_CANCELLED)
         mutableState.value = mutableState.value.copy(
             screen = WearScreen.FINISHED,
@@ -293,7 +304,7 @@ class WearRuntime(context: Context) {
         activeEvent = activeEvent?.copy(
             state = MonitoringState.RESOLVED,
             endedAtEpochMillis = System.currentTimeMillis(),
-        ).also { it?.let(database::upsertEvent) }
+        ).also { it?.let(::persistActiveEvent) }
         stateMachine.finishResolution()
         mutableState.value = mutableState.value.copy(
             screen = WearScreen.MONITORING,
@@ -375,7 +386,11 @@ class WearRuntime(context: Context) {
                 state = nextState,
                 triggerScore = detection.score,
                 rulesVersion = detection.rulesVersion,
-            ).also(database::upsertEvent)
+                features = features,
+                baseline = baseline,
+            ).also(database::upsertSuspectedEvent)
+            activeEventKind = WearDatabase.EVENT_KIND_SUSPECTED
+            outbox.requestSync()
             mutableState.value = mutableState.value.copy(
                 screen = WearScreen.VALIDATION,
                 message = "Detectamos cambios fisiológicos inusuales.",
@@ -383,6 +398,29 @@ class WearRuntime(context: Context) {
             haptics.alert()
             notifier.showPossibleEvent()
         }
+    }
+
+    private fun persistActiveEvent(event: PendingEvent) {
+        when (activeEventKind) {
+            WearDatabase.EVENT_KIND_SUSPECTED -> database.upsertSuspectedEvent(event)
+            else -> database.upsertSosEvent(event)
+        }
+    }
+
+    private fun persistPrimaryDecisionIfNeeded(response: UserResponse) {
+        if (response != UserResponse.ACTIVITY_CONFIRMED &&
+            response != UserResponse.USER_OK &&
+            response != UserResponse.SUPPORT_REQUESTED
+        ) {
+            return
+        }
+        val event = activeEvent ?: return
+        val decision = event.copy(
+            userResponse = response,
+            endedAtEpochMillis = System.currentTimeMillis(),
+        )
+        database.upsertDecisionEvent(decision)
+        outbox.requestSync()
     }
 
     private fun updateActiveEvent(state: MonitoringState, response: UserResponse) {
@@ -396,7 +434,11 @@ class WearRuntime(context: Context) {
             },
         ).also {
             it?.let { event ->
-                database.upsertEvent(event)
+                when {
+                    response == UserResponse.SOS_CANCELLED -> database.upsertSosCancelEvent(event)
+                    activeEventKind == WearDatabase.EVENT_KIND_SUSPECTED -> database.upsertSuspectedEvent(event)
+                    else -> database.upsertSosEvent(event)
+                }
                 if (response == UserResponse.SOS_CANCELLED) outbox.requestSync()
             }
         }
@@ -415,6 +457,7 @@ class WearRuntime(context: Context) {
         sampleBuffer.clear()
         stateMachine.reset()
         activeEvent = null
+        activeEventKind = null
         database.clearBaseline()
         mutableState.value = mutableState.value.copy(
             monitoringState = MonitoringState.NORMAL,
@@ -432,6 +475,7 @@ class WearRuntime(context: Context) {
             delay(rulesConfig.cooldownMillis)
             stateMachine.cooldownExpired()
             activeEvent = null
+            activeEventKind = null
             mutableState.value = mutableState.value.copy(
                 monitoringState = MonitoringState.NORMAL,
                 anomalySimulation = false,

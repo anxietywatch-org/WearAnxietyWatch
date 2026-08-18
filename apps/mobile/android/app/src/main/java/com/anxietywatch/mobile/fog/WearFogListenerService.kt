@@ -15,7 +15,8 @@ import com.google.android.gms.wearable.WearableListenerService
  * identificador:
  *  - DataItems en `/fog/v1/telemetry/{batchId}` (telemetría en lote)
  *  - mensajes en `/fog/v1/sos/{eventId}`, `/fog/v1/sos/cancel/{eventId}`
- *  - mensajes en `/fog/v1/events/suspected/{eventId}` y `/fog/v1/capabilities`
+ *  - mensajes en `/fog/v1/events/suspected/{eventId}` y `/fog/v1/events/decision/{eventId}`
+ *  - mensajes en `/fog/v1/capabilities`
  *
  * Cada sobre se entrega a JavaScript para enriquecerlo y enviarlo al API (nodo fog,
  * protocolo `fog_phone_v1`). El reloj reintenta mientras no reciba el ACK por
@@ -57,6 +58,11 @@ class WearFogListenerService : WearableListenerService() {
                 FogBridge.enqueueInbound(this, SUSPECTED_KIND, eventId, raw)
                 FogSyncScheduler.schedule(this)
             }
+            path.startsWith(DECISION_PREFIX) -> {
+                val eventId = path.destructure(DECISION_PREFIX) ?: return
+                FogBridge.enqueueInbound(this, DECISION_KIND, eventId, raw)
+                FogSyncScheduler.schedule(this)
+            }
             path == CAPABILITIES_ENDPOINT -> {
                 FogBridge.enqueueInbound(this, CAPABILITIES_KIND, CapabilitiesKey, raw)
                 FogSyncScheduler.schedule(this)
@@ -82,16 +88,20 @@ class WearFogListenerService : WearableListenerService() {
         const val SOS_PREFIX = "/fog/v1/sos/"
         const val SOS_CANCEL_PREFIX = "/fog/v1/sos/cancel/"
         const val SUSPECTED_PREFIX = "/fog/v1/events/suspected/"
+        const val DECISION_PREFIX = "/fog/v1/events/decision/"
         const val CAPABILITIES_ENDPOINT = "/fog/v1/capabilities"
         const val ACK_TELEMETRY_PREFIX = "/fog/v1/ack/telemetry/"
         const val ACK_SOS_PREFIX = "/fog/v1/ack/sos/"
         const val ACK_SOS_CANCEL_PREFIX = "/fog/v1/ack/sos-cancel/"
+        const val ACK_SUSPECTED_PREFIX = "/fog/v1/ack/events/suspected/"
+        const val ACK_DECISION_PREFIX = "/fog/v1/ack/events/decision/"
         const val CapabilitiesKey = "capabilities"
 
         const val TELEMETRY_KIND = "telemetry"
         const val SOS_KIND = "sos"
         const val SOS_CANCEL_KIND = "sos-cancel"
         const val SUSPECTED_KIND = "suspected"
+        const val DECISION_KIND = "decision"
         const val CAPABILITIES_KIND = "capabilities"
         const val PAYLOAD_KEY = "payload"
 

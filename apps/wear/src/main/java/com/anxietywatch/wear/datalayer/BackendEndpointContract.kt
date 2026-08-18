@@ -1,5 +1,7 @@
 package com.anxietywatch.wear.datalayer
 
+import com.anxietywatch.wear.domain.BaselineSnapshot
+import com.anxietywatch.wear.domain.DerivedFeatures
 import com.anxietywatch.wear.domain.PendingEvent
 import com.anxietywatch.wear.storage.StoredTelemetry
 import java.time.Instant
@@ -28,14 +30,19 @@ object BackendEndpointContract {
     const val ACK_TELEMETRY_PREFIX = "/fog/v1/ack/telemetry/"
     const val ACK_SOS_PREFIX = "/fog/v1/ack/sos/"
     const val ACK_SOS_CANCEL_PREFIX = "/fog/v1/ack/sos-cancel/"
+    const val ACK_SUSPECTED_PREFIX = "/fog/v1/ack/events/suspected/"
+    const val ACK_DECISION_PREFIX = "/fog/v1/ack/events/decision/"
 
     private const val TELEMETRY_SCHEMA = "wear-telemetry-records-v2"
     private const val SOS_SCHEMA = "wear-sos-trigger-v1"
+    private const val SUSPECTED_SCHEMA = "wear-suspected-event-v1"
+    private const val DECISION_SCHEMA = "wear-event-decision-v1"
 
     fun telemetryPath(batchId: String): String = "$TELEMETRY_ENDPOINT/$batchId"
     fun sosPath(eventId: String): String = "$SOS_ENDPOINT/$eventId"
     fun sosCancelPath(eventId: String): String = "$SOS_CANCEL_ENDPOINT/$eventId"
     fun suspectedPath(eventId: String): String = "$SUSPECTED_EVENT_ENDPOINT/$eventId"
+    fun decisionPath(eventId: String): String = "$EVENTS_DECISION_ENDPOINT/$eventId"
 
     fun telemetryEnvelope(batchId: String, rows: List<StoredTelemetry>): JSONObject {
         require(rows.isNotEmpty()) { "El lote de telemetría no puede estar vacío." }
@@ -96,6 +103,35 @@ object BackendEndpointContract {
             .put("mobileEnrichmentRequired", JSONArray(listOf("userId", "deviceId")))
     }
 
+    fun suspectedEventEnvelope(event: PendingEvent): JSONObject = JSONObject()
+        .put("schemaVersion", SUSPECTED_SCHEMA)
+        .put("targetEndpoint", SUSPECTED_EVENT_ENDPOINT)
+        .put("transport", "WEAR_DATA_LAYER")
+        .put("eventId", event.id)
+        .put("detectedAt", Instant.ofEpochMilli(event.startedAtEpochMillis).toString())
+        .put("state", event.state.name)
+        .put("score", event.triggerScore)
+        .put("rulesVersion", event.rulesVersion)
+        .put("features", event.features?.let { suspectedFeaturesJson(it) } ?: JSONObject.NULL)
+        .put("baseline", event.baseline?.let { baselineJson(it) } ?: JSONObject.NULL)
+        .put(
+            "mobileEnrichmentRequired",
+            JSONArray(listOf("userId", "deviceId", "sessionId", "sequence")),
+        )
+
+    fun eventDecisionEnvelope(event: PendingEvent): JSONObject {
+        val respondedAtMillis = event.endedAtEpochMillis ?: event.startedAtEpochMillis
+        return JSONObject()
+            .put("schemaVersion", DECISION_SCHEMA)
+            .put("targetEndpoint", EVENTS_DECISION_ENDPOINT)
+            .put("transport", "WEAR_DATA_LAYER")
+            .put("eventId", event.id)
+            .put("detectedAt", Instant.ofEpochMilli(event.startedAtEpochMillis).toString())
+            .put("respondedAt", Instant.ofEpochMilli(respondedAtMillis).toString())
+            .put("response", event.userResponse?.name)
+            .put("mobileEnrichmentRequired", JSONArray(listOf("userId", "deviceId", "sessionId", "sequence")))
+    }
+
     fun capabilitiesEnvelope(deviceModel: String, wearOsVersion: String): JSONObject = JSONObject()
         .put("schemaVersion", "fog-capabilities-v1")
         .put("targetEndpoint", CAPABILITIES_ENDPOINT)
@@ -105,3 +141,22 @@ object BackendEndpointContract {
         .put("wearOsVersion", wearOsVersion)
         .put("mobileEnrichmentRequired", JSONArray(listOf("userId", "deviceId")))
 }
+
+private fun suspectedFeaturesJson(features: DerivedFeatures): JSONObject = JSONObject()
+    .put("heartRateMean", features.heartRateMean ?: JSONObject.NULL)
+    .put("heartRateMax", features.heartRateMax ?: JSONObject.NULL)
+    .put("heartRateSlopeBpmPerMinute", features.heartRateSlopeBpmPerMinute ?: JSONObject.NULL)
+    .put("heartRateDeltaFromBaseline", features.heartRateDeltaFromBaseline ?: JSONObject.NULL)
+    .put("rmssdMillis", features.rmssdMillis ?: JSONObject.NULL)
+    .put("sdnnMillis", features.sdnnMillis ?: JSONObject.NULL)
+    .put("movementMagnitudeMean", features.movementMagnitudeMean ?: JSONObject.NULL)
+    .put("movementVariance", features.movementVariance ?: JSONObject.NULL)
+    .put("validSampleRatio", features.validSampleRatio)
+    .put("lastSampleAgeSeconds", features.lastSampleAgeSeconds)
+    .put("sampleCount", features.sampleCount)
+
+private fun baselineJson(baseline: BaselineSnapshot): JSONObject = JSONObject()
+    .put("sampleCount", baseline.sampleCount)
+    .put("meanHeartRate", baseline.meanHeartRate)
+    .put("heartRateM2", baseline.heartRateM2)
+    .put("updatedAtEpochMillis", baseline.updatedAtEpochMillis)

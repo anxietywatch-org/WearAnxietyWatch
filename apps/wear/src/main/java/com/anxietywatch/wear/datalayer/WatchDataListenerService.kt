@@ -11,6 +11,8 @@ import com.google.android.gms.wearable.WearableListenerService
  *  - `/fog/v1/ack/telemetry/{batchId}`
  *  - `/fog/v1/ack/sos/{eventId}`
  *  - `/fog/v1/ack/sos-cancel/{eventId}`
+ *  - `/fog/v1/ack/events/suspected/{eventId}`
+ *  - `/fog/v1/ack/events/decision/{eventId}`
  *
  * y marca los lotes/eventos como CONFIRMED en la base local.
  */
@@ -28,6 +30,12 @@ class WatchDataListenerService : WearableListenerService() {
             }
             path.startsWith(BackendEndpointContract.ACK_SOS_CANCEL_PREFIX) -> {
                 runtime.handleAck(sosCancelEventId = path.removePrefix(BackendEndpointContract.ACK_SOS_CANCEL_PREFIX))
+            }
+            path.startsWith(BackendEndpointContract.ACK_SUSPECTED_PREFIX) -> {
+                runtime.handleAck(suspectedEventId = path.removePrefix(BackendEndpointContract.ACK_SUSPECTED_PREFIX))
+            }
+            path.startsWith(BackendEndpointContract.ACK_DECISION_PREFIX) -> {
+                runtime.handleAck(decisionEventId = path.removePrefix(BackendEndpointContract.ACK_DECISION_PREFIX))
             }
         }
     }

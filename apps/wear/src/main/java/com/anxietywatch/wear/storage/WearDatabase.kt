@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import com.anxietywatch.wear.domain.BaselineSnapshot
+import com.anxietywatch.wear.domain.DerivedFeatures
 import com.anxietywatch.wear.domain.MonitoringState
 import com.anxietywatch.wear.domain.PendingEvent
 import com.anxietywatch.wear.domain.SensorReading
@@ -81,7 +82,7 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
         db.execSQL("CREATE INDEX batches_idx ON sync_batches(state, next_attempt_at)")
         db.execSQL(
             """
-            CREATE TABLE events (
+CREATE TABLE events (
                 kind TEXT NOT NULL,
                 id TEXT NOT NULL,
                 started_at INTEGER NOT NULL,
@@ -91,6 +92,8 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
                 rules_version TEXT NOT NULL,
                 user_response TEXT,
                 sos_status TEXT,
+                features_json TEXT,
+                baseline_json TEXT,
                 sync_state TEXT NOT NULL DEFAULT 'QUEUED',
                 attempts INTEGER NOT NULL DEFAULT 0,
                 next_attempt_at INTEGER NOT NULL DEFAULT 0,
@@ -203,9 +206,17 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
                 FROM events
                 """.trimIndent(),
             )
-            db.execSQL("DROP TABLE events")
+db.execSQL("DROP TABLE events")
             db.execSQL("ALTER TABLE events_v4 RENAME TO events")
             db.execSQL("CREATE INDEX events_sync_idx ON events(sync_state, next_attempt_at)")
+        }
+        if (oldVersion < 5) {
+            // Snapshot de la detección para construir ground truth: el evento
+            // detectado conserva las features y el baseline de la ventana que
+            // disparó USER_VALIDATION. Columnas opcionales; el SOS manual no
+            // las rellena.
+            db.execSQL("ALTER TABLE events ADD COLUMN features_json TEXT")
+            db.execSQL("ALTER TABLE events ADD COLUMN baseline_json TEXT")
         }
     }
 
@@ -365,9 +376,28 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
         arrayOf(SyncState.QUEUED.name, SyncState.FAILED.name),
     ).use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else 0 }
 
+@Synchronized
+    fun upsertSuspectedEvent(event: PendingEvent) {
+        upsertEventRow(event, EVENT_KIND_SUSPECTED)
+    }
+
     @Synchronized
-    fun upsertEvent(event: PendingEvent) {
-        val kind = eventKind(event)
+    fun upsertDecisionEvent(event: PendingEvent) {
+        upsertEventRow(event, EVENT_KIND_DECISION)
+    }
+
+    @Synchronized
+    fun upsertSosEvent(event: PendingEvent) {
+        upsertEventRow(event, EVENT_KIND_SOS)
+    }
+
+    @Synchronized
+    fun upsertSosCancelEvent(event: PendingEvent) {
+        upsertEventRow(event, EVENT_KIND_SOS_CANCEL)
+    }
+
+    @Synchronized
+    private fun upsertEventRow(event: PendingEvent, kind: String) {
         val existing = eventSyncState(kind, event.id)
         val values = ContentValues().apply {
             put("kind", kind)
@@ -379,6 +409,8 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
             put("rules_version", event.rulesVersion)
             event.userResponse?.let { put("user_response", it.name) }
             event.sosStatus?.let { put("sos_status", it) }
+            event.features?.let { put("features_json", featuresJson(it).toString()) }
+            event.baseline?.let { put("baseline_json", baselineJson(it).toString()) }
             put("sync_state", existing?.first ?: SyncState.QUEUED.name)
             put("attempts", existing?.second ?: 0)
             put("next_attempt_at", existing?.third ?: 0L)
@@ -409,12 +441,13 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
             }
         }
 
-    @Synchronized
+@Synchronized
     fun pendingEvents(now: Long): List<StoredEventOperation> = readableDatabase.query(
         "events",
         arrayOf(
             "kind", "id", "started_at", "ended_at", "state", "trigger_score",
-            "rules_version", "user_response", "sos_status", "attempts", "next_attempt_at",
+            "rules_version", "user_response", "sos_status", "features_json", "baseline_json",
+            "attempts", "next_attempt_at",
         ),
         "sync_state IN (?, ?) AND next_attempt_at <= ?",
         arrayOf(SyncState.QUEUED.name, SyncState.FAILED.name, now.toString()),
@@ -435,8 +468,10 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
                     rulesVersion = cursor.getString(6),
                     userResponse = cursor.getString(7)?.let { UserResponse.valueOf(it) },
                     sosStatus = cursor.getString(8),
-                    attempts = cursor.getInt(9),
-                    nextAttemptAt = cursor.getLong(10),
+                    features = cursor.getString(9)?.let { runCatching { parseFeatures(JSONObject(it)) }.getOrNull() },
+                    baseline = cursor.getString(10)?.let { runCatching { parseBaseline(JSONObject(it)) }.getOrNull() },
+                    attempts = cursor.getInt(11),
+                    nextAttemptAt = cursor.getLong(12),
                 ),
             )
         }
@@ -553,19 +588,61 @@ class WearDatabase(context: Context) : SQLiteOpenHelper(
         )
     }
 
-    companion object {
+companion object {
         private const val DATABASE_NAME = "anxietywatch-wear.db"
         const val EVENT_KIND_SOS = "sos"
         const val EVENT_KIND_SOS_CANCEL = "sos-cancel"
-        private const val DATABASE_VERSION = 4
+        const val EVENT_KIND_SUSPECTED = "suspected"
+        const val EVENT_KIND_DECISION = "decision"
+        private const val DATABASE_VERSION = 5
         private const val BASELINE_NAME = "heart-rate-v1"
         private const val MAX_ROWS = 10_000
         private const val SEVEN_DAYS_MILLIS = 7L * 24 * 60 * 60 * 1000
     }
-
-    private fun eventKind(event: PendingEvent): String =
-        if (event.userResponse == UserResponse.SOS_CANCELLED) EVENT_KIND_SOS_CANCEL else EVENT_KIND_SOS
 }
+
+private fun JSONObject.optDoubleNullable(name: String): Double? =
+    if (isNull(name)) null else optDouble(name).takeIf { !it.isNaN() }
+
+private fun featuresJson(features: DerivedFeatures): JSONObject = JSONObject()
+    .put("heartRateMean", features.heartRateMean ?: JSONObject.NULL)
+    .put("heartRateMax", features.heartRateMax ?: JSONObject.NULL)
+    .put("heartRateSlopeBpmPerMinute", features.heartRateSlopeBpmPerMinute ?: JSONObject.NULL)
+    .put("heartRateDeltaFromBaseline", features.heartRateDeltaFromBaseline ?: JSONObject.NULL)
+    .put("rmssdMillis", features.rmssdMillis ?: JSONObject.NULL)
+    .put("sdnnMillis", features.sdnnMillis ?: JSONObject.NULL)
+    .put("movementMagnitudeMean", features.movementMagnitudeMean ?: JSONObject.NULL)
+    .put("movementVariance", features.movementVariance ?: JSONObject.NULL)
+    .put("validSampleRatio", features.validSampleRatio)
+    .put("lastSampleAgeSeconds", features.lastSampleAgeSeconds)
+    .put("sampleCount", features.sampleCount)
+
+private fun parseFeatures(json: JSONObject): DerivedFeatures = DerivedFeatures(
+    heartRateMean = json.optDoubleNullable("heartRateMean"),
+    heartRateMax = json.optDoubleNullable("heartRateMax"),
+    heartRateSlopeBpmPerMinute = json.optDoubleNullable("heartRateSlopeBpmPerMinute"),
+    heartRateDeltaFromBaseline = json.optDoubleNullable("heartRateDeltaFromBaseline"),
+    rmssdMillis = json.optDoubleNullable("rmssdMillis"),
+    sdnnMillis = json.optDoubleNullable("sdnnMillis"),
+    movementMagnitudeMean = json.optDoubleNullable("movementMagnitudeMean"),
+    movementVariance = json.optDoubleNullable("movementVariance"),
+    validSampleRatio = json.optDouble("validSampleRatio", 0.0),
+    lastSampleAgeSeconds = json.optLong("lastSampleAgeSeconds", 0L),
+    sampleCount = json.optInt("sampleCount", 0),
+)
+
+private fun baselineJson(baseline: BaselineSnapshot): JSONObject = JSONObject()
+    .put("sampleCount", baseline.sampleCount)
+    .put("meanHeartRate", baseline.meanHeartRate)
+    .put("heartRateM2", baseline.heartRateM2)
+    .put("updatedAtEpochMillis", baseline.updatedAtEpochMillis)
+
+private fun parseBaseline(json: JSONObject): BaselineSnapshot = BaselineSnapshot(
+    sampleCount = json.optLong("sampleCount", 0L),
+    meanHeartRate = json.optDouble("meanHeartRate", 0.0),
+    heartRateM2 = json.optDouble("heartRateM2", 0.0),
+    updatedAtEpochMillis = json.optLong("updatedAtEpochMillis", 0L),
+)
 
 private fun SensorReading.typeName(): String = when (this) {
     is SensorReading.HeartRate -> "heart_rate"

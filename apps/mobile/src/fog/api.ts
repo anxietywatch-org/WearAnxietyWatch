@@ -1,18 +1,23 @@
 import type {
   DeliveryResult,
+  EventDecisionPayload,
   FogEntry,
   FogIdentity,
   SosCancelPayload,
-  TelemetryBatchPayload,
   SosTriggerPayload,
-  WearTelemetryEnvelope,
-  WearSosEnvelope,
+  SuspectedEventPayload,
+  TelemetryBatchPayload,
+  WearEventDecisionEnvelope,
   WearSosCancelEnvelope,
+  WearSuspectedEventEnvelope,
+  WearTelemetryEnvelope,
 } from './types';
 import {
   type FogEnvelope,
+  enrichEventDecision,
   enrichSos,
   enrichSosCancel,
+  enrichSuspectedEvent,
   enrichTelemetry,
   parseEnvelope,
 } from './enricher';
@@ -27,6 +32,14 @@ export interface FogApiClient {
     payload: SosCancelPayload,
     token: string,
   ): Promise<DeliveryResult>;
+  postSuspectedEvent(
+    payload: SuspectedEventPayload,
+    token: string,
+  ): Promise<DeliveryResult>;
+  postEventDecision(
+    payload: EventDecisionPayload,
+    token: string,
+  ): Promise<DeliveryResult>;
 }
 
 function isTelemetry(
@@ -39,6 +52,18 @@ function isSosCancel(
   envelope: FogEnvelope,
 ): envelope is WearSosCancelEnvelope {
   return envelope.targetEndpoint === '/fog/v1/sos/cancel';
+}
+
+function isSuspectedEvent(
+  envelope: FogEnvelope,
+): envelope is WearSuspectedEventEnvelope {
+  return envelope.targetEndpoint === '/fog/v1/events/suspected';
+}
+
+function isEventDecision(
+  envelope: FogEnvelope,
+): envelope is WearEventDecisionEnvelope {
+  return envelope.targetEndpoint === '/fog/v1/events/decision';
 }
 
 export class HttpFogApiClient implements FogApiClient {
@@ -105,6 +130,30 @@ export class HttpFogApiClient implements FogApiClient {
     return this.toResult(payload.eventId, 'sos-cancel', response);
   }
 
+  async postSuspectedEvent(
+    payload: SuspectedEventPayload,
+    token: string,
+  ): Promise<DeliveryResult> {
+    const response = await HttpFogApiClient.post(
+      `${this.baseUrl}/api/v1/events/suspected`,
+      payload,
+      token,
+    );
+    return this.toResult(payload.eventId, 'suspected', response);
+  }
+
+  async postEventDecision(
+    payload: EventDecisionPayload,
+    token: string,
+  ): Promise<DeliveryResult> {
+    const response = await HttpFogApiClient.post(
+      `${this.baseUrl}/api/v1/events/decision`,
+      payload,
+      token,
+    );
+    return this.toResult(payload.eventId, 'decision', response);
+  }
+
   private async toResult(
     key: string,
     kind: DeliveryResult['kind'],
@@ -150,6 +199,14 @@ export async function deliverEntry(
     const payload = enrichSosCancel(envelope, identity);
     return client.postSosCancel(payload, token);
   }
+  if (isSuspectedEvent(envelope)) {
+    const payload = enrichSuspectedEvent(envelope, identity);
+    return client.postSuspectedEvent(payload, token);
+  }
+  if (isEventDecision(envelope)) {
+    const payload = enrichEventDecision(envelope, identity);
+    return client.postEventDecision(payload, token);
+  }
   if (isTelemetry(envelope)) {
     const payload = enrichTelemetry(envelope, identity);
     if (!payload) {
@@ -157,6 +214,6 @@ export async function deliverEntry(
     }
     return client.postTelemetry(payload, token);
   }
-  const payload = enrichSos(envelope as WearSosEnvelope, identity);
+  const payload = enrichSos(envelope, identity);
   return client.postSos(payload, token);
 }
