@@ -388,7 +388,7 @@ class WearRuntime(context: Context) {
                 rulesVersion = detection.rulesVersion,
                 features = features,
                 baseline = baseline,
-            ).also(database::upsertSuspectedEvent)
+            ).also { database.insertSuspectedEventOnce(it) }
             activeEventKind = WearDatabase.EVENT_KIND_SUSPECTED
             outbox.requestSync()
             mutableState.value = mutableState.value.copy(
@@ -402,7 +402,10 @@ class WearRuntime(context: Context) {
 
     private fun persistActiveEvent(event: PendingEvent) {
         when (activeEventKind) {
-            WearDatabase.EVENT_KIND_SUSPECTED -> database.upsertSuspectedEvent(event)
+            WearDatabase.EVENT_KIND_SUSPECTED -> {
+                // DO NOT update suspected event: transport snapshot is immutable after creation.
+                // Only transport metadata (sync_state, attempts, next_attempt_at) changes via ACK path.
+            }
             else -> database.upsertSosEvent(event)
         }
     }

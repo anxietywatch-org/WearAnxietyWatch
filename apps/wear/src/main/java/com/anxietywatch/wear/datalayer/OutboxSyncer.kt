@@ -98,16 +98,47 @@ suspend fun dispatchEventNow(event: PendingEvent) {
         }
     }
 
-    private suspend fun runSyncCycle() {
+private suspend fun runSyncCycle() {
         val node = connectedNode() ?: return
         announceIfNeeded(node)
-        // 1. Telemetry batches first (independent)
-        if (sendOutstandingBatches(node)) return
-        if (sendNewTelemetryBatches(node)) return
-        // 2. Suspected events only if their telemetry window is confirmed
-        if (sendEligibleSuspectedEvents(node)) return
-        // 3. Decision events only if their suspected event is confirmed
-        if (sendEligibleDecisionEvents(node)) return
+        // 1. Explicit SOS/SOS_CANCEL always eligible (emergency operations)
+        sendPendingSosOperations(node)
+        // 2. Telemetry batches first (independent)
+        sendOutstandingBatches(node)
+        sendNewTelemetryBatches(node)
+        // 3. Suspected events only if their telemetry window is confirmed
+        sendEligibleSuspectedEvents(node)
+        // 4. Decision events only if their suspected event is confirmed
+        sendEligibleDecisionEvents(node)
+    }
+
+    /**
+     * Sends explicit manual SOS and SOS cancellation events.
+     * These are emergency operations that must NEVER be blocked by telemetry,
+     * suspected, or decision dependencies. They have their own independent retry/ACK logic.
+     */
+    private suspend fun sendPendingSosOperations(node: Node) {
+        val now = System.currentTimeMillis()
+        val pending = database.pendingEvents(now)
+        for (operation in pending) {
+            val event = operation.event
+            val (route, envelope) = when (operation.kind) {
+                WearDatabase.EVENT_KIND_SOS_CANCEL ->
+                    BackendEndpointContract.sosCancelPath(event.id) to BackendEndpointContract.sosCancelEnvelope(event)
+                WearDatabase.EVENT_KIND_SOS ->
+                    BackendEndpointContract.sosPath(event.id) to BackendEndpointContract.sosEnvelope(event)
+                else -> continue
+            }
+            val bytes = envelope.toString().toByteArray(Charsets.UTF_8)
+            try {
+                messageClient.sendMessage(node.id, route, bytes).awaitResult()
+                val attempt = event.attempts + 1
+                database.markEventSent(operation.kind, event.id, attempt, now + backoffMillis(attempt))
+            } catch (e: Exception) {
+                val attempt = event.attempts + 1
+                database.markEventFailed(operation.kind, event.id, attempt, now + backoffMillis(attempt))
+            }
+        }
     }
 
     /**

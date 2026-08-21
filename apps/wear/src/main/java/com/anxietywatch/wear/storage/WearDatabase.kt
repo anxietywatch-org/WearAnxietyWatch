@@ -377,6 +377,35 @@ db.execSQL("DROP TABLE events")
     ).use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else 0 }
 
 @Synchronized
+    fun insertSuspectedEventOnce(event: PendingEvent): Boolean {
+        // INSERT-ONCE for immutable suspected transport snapshot.
+        // Uses CONFLICT_IGNORE so the immutable detector snapshot (features, baseline, state, score, etc.)
+        // is written exactly once. Transport metadata (sync_state, attempts, next_attempt_at) is
+        // managed separately via markEventSent/markEventConfirmed/markEventFailed.
+        val values = ContentValues().apply {
+            put("kind", EVENT_KIND_SUSPECTED)
+            put("id", event.id)
+            put("started_at", event.startedAtEpochMillis)
+            event.endedAtEpochMillis?.let { put("ended_at", it) }
+            put("state", event.state.name)
+            put("trigger_score", event.triggerScore)
+            put("rules_version", event.rulesVersion)
+            event.features?.let { put("features_json", featuresJson(it).toString()) }
+            event.baseline?.let { put("baseline_json", baselineJson(it).toString()) }
+            put("sync_state", SyncState.QUEUED.name)
+            put("attempts", 0)
+            put("next_attempt_at", 0L)
+        }
+        val rowsAffected = writableDatabase.insertWithOnConflict(
+            "events",
+            null,
+            values,
+            SQLiteDatabase.CONFLICT_IGNORE,
+        )
+        return rowsAffected > 0
+    }
+
+    @Synchronized
     fun upsertSuspectedEvent(event: PendingEvent) {
         upsertEventRow(event, EVENT_KIND_SUSPECTED)
     }
