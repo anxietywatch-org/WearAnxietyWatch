@@ -437,7 +437,11 @@ class WearRuntime(context: Context) {
             it?.let { event ->
                 when {
                     response == UserResponse.SOS_CANCELLED -> database.upsertSosCancelEvent(event)
-                    activeEventKind == WearDatabase.EVENT_KIND_SUSPECTED -> database.upsertSuspectedEvent(event)
+                    activeEventKind == WearDatabase.EVENT_KIND_SUSPECTED -> {
+                        // DO NOT upsertSuspectedEvent: suspected transport snapshot must remain
+                        // the immutable detector snapshot at T (USER_VALIDATION, original score,
+                        // rulesVersion, features, baseline). Only the decision row is updated.
+                    }
                     else -> database.upsertSosEvent(event)
                 }
                 if (response == UserResponse.SOS_CANCELLED) outbox.requestSync()

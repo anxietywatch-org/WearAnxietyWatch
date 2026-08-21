@@ -232,7 +232,131 @@ db.upsertSosCancelEvent(cancelled)
     }
 
     @Test
-    fun `suspected event round-trips features and baseline snapshot`() {
+    fun `suspected snapshot remains immutable after user response`() {
+        val eventId = "immutability-test-id"
+        val event = PendingEvent(
+            id = eventId,
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.88,
+            rulesVersion = "rules-v2",
+            features = DerivedFeatures(
+                heartRateMean = 96.0,
+                heartRateMax = 108.0,
+                heartRateSlopeBpmPerMinute = -5.5,
+                heartRateDeltaFromBaseline = 12.0,
+                rmssdMillis = 21.0,
+                sdnnMillis = 30.0,
+                movementMagnitudeMean = 0.05,
+                movementVariance = 0.0004,
+                validSampleRatio = 0.95,
+                lastSampleAgeSeconds = 5L,
+                sampleCount = 60,
+            ),
+            baseline = BaselineSnapshot(
+                sampleCount = 240L,
+                meanHeartRate = 82.0,
+                heartRateM2 = 310.0,
+                updatedAtEpochMillis = 2_900_000L,
+            ),
+        )
+        db.upsertSuspectedEvent(event)
+
+        // User responds before suspected ACK
+        val decision = event.copy(
+            userResponse = UserResponse.SUPPORT_REQUESTED,
+            endedAtEpochMillis = 2_000L,
+            state = MonitoringState.INTERVENTION,
+        )
+        db.upsertDecisionEvent(decision)
+
+        // Reload suspected from DB
+        val suspected = db.pendingEvents(now = Long.MAX_VALUE)
+            .first { it.kind == WearDatabase.EVENT_KIND_SUSPECTED && it.event.id == eventId }
+            .event
+
+        // Verify suspected snapshot remains IMMUTABLE (original detector state)
+        assertEquals(MonitoringState.USER_VALIDATION, suspected.state)
+        assertEquals(1_000L, suspected.startedAtEpochMillis)
+        assertEquals(0.88, suspected.triggerScore, 0.001)
+        assertEquals("rules-v2", suspected.rulesVersion)
+        assertEquals(-5.5, suspected.features?.heartRateSlopeBpmPerMinute, 0.001)
+        assertEquals(96.0, suspected.features?.heartRateMean, 0.001)
+        assertEquals(108.0, suspected.features?.heartRateMax, 0.001)
+        assertEquals(12.0, suspected.features?.heartRateDeltaFromBaseline, 0.001)
+        assertEquals(21.0, suspected.features?.rmssdMillis, 0.001)
+        assertEquals(30.0, suspected.features?.sdnnMillis, 0.001)
+        assertEquals(0.05, suspected.features?.movementMagnitudeMean, 0.001)
+        assertEquals(0.0004, suspected.features?.movementVariance, 0.001)
+        assertEquals(0.95, suspected.features?.validSampleRatio, 0.001)
+        assertEquals(5L, suspected.features?.lastSampleAgeSeconds)
+        assertEquals(60, suspected.features?.sampleCount)
+        assertEquals(240L, suspected.baseline?.sampleCount)
+        assertEquals(82.0, suspected.baseline?.meanHeartRate, 0.001)
+        assertEquals(310.0, suspected.baseline?.heartRateM2, 0.001)
+        assertEquals(2_900_000L, suspected.baseline?.updatedAtEpochMillis)
+
+        // Decision row contains user response
+        val decision = db.pendingEvents(now = Long.MAX_VALUE)
+            .first { it.kind == WearDatabase.EVENT_KIND_DECISION && it.event.id == eventId }
+            .event
+        assertEquals(UserResponse.SUPPORT_REQUESTED, decision.userResponse)
+        assertEquals(MonitoringState.INTERVENTION, decision.state)
+        assertNotNull(decision.endedAtEpochMillis)
+        assertEquals(eventId, decision.id)
+    }
+
+    @Test
+    fun `immutable suspected snapshot with USER_OK`() {
+        val eventId = "immutability-user-ok"
+        val event = PendingEvent(
+            id = eventId,
+            startedAtEpochMillis = 2_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.75,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        val decision = event.copy(
+            userResponse = UserResponse.USER_OK,
+            endedAtEpochMillis = 3_000L,
+            state = MonitoringState.COOLDOWN,
+        )
+        db.upsertDecisionEvent(decision)
+
+        val suspected = db.pendingEvents(now = Long.MAX_VALUE)
+            .first { it.kind == WearDatabase.EVENT_KIND_SUSPECTED && it.event.id == eventId }
+            .event
+
+        assertEquals(MonitoringState.USER_VALIDATION, suspected.state)
+    }
+
+    @Test
+    fun `immutable suspected snapshot with ACTIVITY_CONFIRMED`() {
+        val eventId = "immutability-activity"
+        val event = PendingEvent(
+            id = eventId,
+            startedAtEpochMillis = 3_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.85,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        val decision = event.copy(
+            userResponse = UserResponse.ACTIVITY_CONFIRMED,
+            endedAtEpochMillis = 4_000L,
+            state = MonitoringState.COOLDOWN,
+        )
+        db.upsertDecisionEvent(decision)
+
+        val suspected = db.pendingEvents(now = Long.MAX_VALUE)
+            .first { it.kind == WearDatabase.EVENT_KIND_SUSPECTED && it.event.id == eventId }
+            .event
+
+        assertEquals(MonitoringState.USER_VALIDATION, suspected.state)
+    }
         val event = PendingEvent(
             id = "snapshot-id",
             startedAtEpochMillis = 1_000L,
@@ -441,7 +565,7 @@ db.upsertSosCancelEvent(cancelled)
     }
 
     @Test
-    fun `isTelemetryWindowConfirmed returns true when no batches cover window`() {
+    fun `isTelemetryWindowConfirmed returns false when no telemetry rows in window`() {
         val event = PendingEvent(
             startedAtEpochMillis = 100_000L,
             state = MonitoringState.USER_VALIDATION,
@@ -450,8 +574,8 @@ db.upsertSosCancelEvent(cancelled)
         )
         db.upsertSuspectedEvent(event)
 
-        // No batches covering the window -> vacuously true (empty window)
-        assertTrue(db.isTelemetryWindowConfirmed(event))
+        // No telemetry rows in window -> false
+        assertTrue(!db.isTelemetryWindowConfirmed(event))
     }
 
     @Test
@@ -508,5 +632,166 @@ db.upsertSosCancelEvent(cancelled)
         db.upsertDecisionEvent(event)
         db.markEventConfirmed(WearDatabase.EVENT_KIND_DECISION, event.id)
         assertTrue(db.isDecisionEventConfirmed(event.id))
+    }
+
+    @Test
+    fun `isTelemetryWindowConfirmed false when queued telemetry in window`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 100_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        val values = android.content.ContentValues().apply {
+            put("id", "telemetry-queued")
+            put("captured_at", 80_000L)
+            put("type", "heart_rate")
+            put("payload", "{}")
+            put("sync_state", SyncState.QUEUED.name)
+        }
+        db.writableDatabase.insert("telemetry", null, values)
+
+        assertTrue(!db.isTelemetryWindowConfirmed(event))
+    }
+
+    @Test
+    fun `isTelemetryWindowConfirmed false when failed telemetry in window`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 100_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        val values = android.content.ContentValues().apply {
+            put("id", "telemetry-failed")
+            put("captured_at", 80_000L)
+            put("type", "heart_rate")
+            put("payload", "{}")
+            put("sync_state", SyncState.FAILED.name)
+        }
+        db.writableDatabase.insert("telemetry", null, values)
+
+        assertTrue(!db.isTelemetryWindowConfirmed(event))
+    }
+
+    @Test
+    fun `isTelemetryWindowConfirmed false when sent unconfirmed telemetry in window`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 100_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        val values = android.content.ContentValues().apply {
+            put("id", "telemetry-sent")
+            put("captured_at", 80_000L)
+            put("type", "heart_rate")
+            put("payload", "{}")
+            put("sync_state", SyncState.SENT.name)
+        }
+        db.writableDatabase.insert("telemetry", null, values)
+
+        assertTrue(!db.isTelemetryWindowConfirmed(event))
+    }
+
+    @Test
+    fun `isTelemetryWindowConfirmed true when all local telemetry rows in window confirmed`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 100_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        val id = "telemetry-confirmed"
+        val values = android.content.ContentValues().apply {
+            put("id", id)
+            put("captured_at", 80_000L)
+            put("type", "heart_rate")
+            put("payload", "{}")
+            put("sync_state", SyncState.QUEUED.name)
+        }
+        db.writableDatabase.insert("telemetry", null, values)
+        db.markTelemetrySent(listOf(id), "batch-1")
+        db.markTelemetryConfirmedByBatch("batch-1")
+
+        assertTrue(db.isTelemetryWindowConfirmed(event))
+    }
+
+    @Test
+    fun `isTelemetryWindowConfirmed true pending telemetry after T does not block`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 100_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        val id1 = "telemetry-confirmed"
+        var values = android.content.ContentValues().apply {
+            put("id", id1)
+            put("captured_at", 80_000L)
+            put("type", "heart_rate")
+            put("payload", "{}")
+            put("sync_state", SyncState.QUEUED.name)
+        }
+        db.writableDatabase.insert("telemetry", null, values)
+        db.markTelemetrySent(listOf(id1), "batch-1")
+        db.markTelemetryConfirmedByBatch("batch-1")
+
+        val id2 = "telemetry-after"
+        values = android.content.ContentValues().apply {
+            put("id", id2)
+            put("captured_at", 120_000L)
+            put("type", "heart_rate")
+            put("payload", "{}")
+            put("sync_state", SyncState.QUEUED.name)
+        }
+        db.writableDatabase.insert("telemetry", null, values)
+
+        assertTrue(db.isTelemetryWindowConfirmed(event))
+    }
+
+    @Test
+    fun `isTelemetryWindowConfirmed true pending telemetry before T-60 does not block`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 100_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        val id1 = "telemetry-confirmed"
+        var values = android.content.ContentValues().apply {
+            put("id", id1)
+            put("captured_at", 80_000L)
+            put("type", "heart_rate")
+            put("payload", "{}")
+            put("sync_state", SyncState.QUEUED.name)
+        }
+        db.writableDatabase.insert("telemetry", null, values)
+        db.markTelemetrySent(listOf(id1), "batch-1")
+        db.markTelemetryConfirmedByBatch("batch-1")
+
+        val id2 = "telemetry-before"
+        values = android.content.ContentValues().apply {
+            put("id", id2)
+            put("captured_at", 30_000L)
+            put("type", "heart_rate")
+            put("payload", "{}")
+            put("sync_state", SyncState.QUEUED.name)
+        }
+        db.writableDatabase.insert("telemetry", null, values)
+
+        assertTrue(db.isTelemetryWindowConfirmed(event))
     }
 }

@@ -480,27 +480,48 @@ db.execSQL("DROP TABLE events")
 
     /**
      * Checks if the telemetry window for a suspected event has been fully cloud-ACKed.
-     * Returns true if all telemetry batches covering [detectedAt - lookback, detectedAt]
-     * have reached CONFIRMED sync state.
+     * Returns true if:
+     * 1. At least one telemetry record exists in the window [detectedAt - lookback, detectedAt]
+     * 2. All telemetry records in that window have sync_state = CONFIRMED
+     * 
+     * Returns FALSE if:
+     * - No telemetry records exist in the window
+     * - Any telemetry record in the window is not CONFIRMED (QUEUED, SENT, FAILED)
+     * 
+     * Telemetry records strictly after T or strictly before T-60s do not affect eligibility.
      */
     @Synchronized
     fun isTelemetryWindowConfirmed(event: PendingEvent, lookbackMillis: Long = 60_000): Boolean {
         if (event.startedAtEpochMillis <= 0) return false
         val windowStart = event.startedAtEpochMillis - lookbackMillis
         val windowEnd = event.startedAtEpochMillis
-        val cursor = readableDatabase.rawQuery(
+
+        // Check if there are any telemetry records in the window
+        val totalCursor = readableDatabase.rawQuery(
             """
-            SELECT COUNT(*) FROM sync_batches
-            WHERE state != 'CONFIRMED'
-              AND from_millis <= ?
-              AND to_millis >= ?
+            SELECT COUNT(*) FROM telemetry
+            WHERE captured_at >= ? AND captured_at <= ?
             """,
-            arrayOf(windowEnd.toString(), windowStart.toString())
+            arrayOf(windowStart.toString(), windowEnd.toString())
         ).use { cursor ->
             cursor.moveToFirst()
             cursor.getInt(0)
         }
-        return cursor == 0
+        if (totalCursor == 0) return false
+
+        // Check if all telemetry records in the window are CONFIRMED
+        val unconfirmedCursor = readableDatabase.rawQuery(
+            """
+            SELECT COUNT(*) FROM telemetry
+            WHERE captured_at >= ? AND captured_at <= ?
+              AND sync_state != ?
+            """,
+            arrayOf(windowStart.toString(), windowEnd.toString(), SyncState.CONFIRMED.name)
+        ).use { cursor ->
+            cursor.moveToFirst()
+            cursor.getInt(0)
+        }
+        return unconfirmedCursor == 0
     }
 
     /**
