@@ -478,6 +478,69 @@ db.execSQL("DROP TABLE events")
         rows
     }
 
+    /**
+     * Checks if the telemetry window for a suspected event has been fully cloud-ACKed.
+     * Returns true if all telemetry batches covering [detectedAt - lookback, detectedAt]
+     * have reached CONFIRMED sync state.
+     */
+    @Synchronized
+    fun isTelemetryWindowConfirmed(event: PendingEvent, lookbackMillis: Long = 60_000): Boolean {
+        if (event.startedAtEpochMillis <= 0) return false
+        val windowStart = event.startedAtEpochMillis - lookbackMillis
+        val windowEnd = event.startedAtEpochMillis
+        val cursor = readableDatabase.rawQuery(
+            """
+            SELECT COUNT(*) FROM sync_batches
+            WHERE state != 'CONFIRMED'
+              AND from_millis <= ?
+              AND to_millis >= ?
+            """,
+            arrayOf(windowEnd.toString(), windowStart.toString())
+        ).use { cursor ->
+            cursor.moveToFirst()
+            cursor.getInt(0)
+        }
+        return cursor == 0
+    }
+
+    /**
+     * Checks if a suspected event has received cloud ACK.
+     */
+    @Synchronized
+    fun isSuspectedEventConfirmed(eventId: String): Boolean {
+        val cursor = readableDatabase.query(
+            "events",
+            arrayOf("sync_state"),
+            "kind = ? AND id = ?",
+            arrayOf(EVENT_KIND_SUSPECTED, eventId),
+            null, null, null, "1"
+        ).use { cursor ->
+            if (cursor.moveToFirst()) {
+                cursor.getString(0)
+            } else null
+        }
+        return cursor == SyncState.CONFIRMED.name
+    }
+
+    /**
+     * Checks if a decision event has received cloud ACK.
+     */
+    @Synchronized
+    fun isDecisionEventConfirmed(eventId: String): Boolean {
+        val cursor = readableDatabase.query(
+            "events",
+            arrayOf("sync_state"),
+            "kind = ? AND id = ?",
+            arrayOf(EVENT_KIND_DECISION, eventId),
+            null, null, null, "1"
+        ).use { cursor ->
+            if (cursor.moveToFirst()) {
+                cursor.getString(0)
+            } else null
+        }
+        return cursor == SyncState.CONFIRMED.name
+    }
+
     @Synchronized
     fun markEventSent(kind: String, eventId: String, attempts: Int, nextAttemptAt: Long) {
         val values = ContentValues().apply {

@@ -88,6 +88,8 @@ suspend fun dispatchEventNow(event: PendingEvent) {
             }
             suspectedEventId?.takeIf { it.isNotEmpty() }?.let {
                 database.markEventConfirmed(WearDatabase.EVENT_KIND_SUSPECTED, it)
+                // When suspected event is confirmed, trigger sync to allow decision delivery
+                requestSync()
             }
             decisionEventId?.takeIf { it.isNotEmpty() }?.let {
                 database.markEventConfirmed(WearDatabase.EVENT_KIND_DECISION, it)
@@ -99,9 +101,73 @@ suspend fun dispatchEventNow(event: PendingEvent) {
     private suspend fun runSyncCycle() {
         val node = connectedNode() ?: return
         announceIfNeeded(node)
-        if (sendPendingEvents(node)) return
+        // 1. Telemetry batches first (independent)
         if (sendOutstandingBatches(node)) return
         if (sendNewTelemetryBatches(node)) return
+        // 2. Suspected events only if their telemetry window is confirmed
+        if (sendEligibleSuspectedEvents(node)) return
+        // 3. Decision events only if their suspected event is confirmed
+        if (sendEligibleDecisionEvents(node)) return
+    }
+
+    /**
+     * Sends suspected events whose telemetry window has been cloud-ACKed.
+     * Returns true if more suspected events remain pending.
+     */
+    private suspend fun sendEligibleSuspectedEvents(node: Node): Boolean {
+        val now = System.currentTimeMillis()
+        val pending = database.pendingEvents(now)
+        var hasMore = false
+        for (operation in pending) {
+            if (operation.kind != WearDatabase.EVENT_KIND_SUSPECTED) continue
+            val event = operation.event
+            // Only send if telemetry window is confirmed
+            if (!database.isTelemetryWindowConfirmed(event)) {
+                hasMore = true
+                continue
+            }
+            val (route, envelope) = BackendEndpointContract.suspectedPath(event.id) to BackendEndpointContract.suspectedEventEnvelope(event)
+            val bytes = envelope.toString().toByteArray(Charsets.UTF_8)
+            try {
+                messageClient.sendMessage(node.id, route, bytes).awaitResult()
+                val attempt = event.attempts + 1
+                database.markEventSent(operation.kind, event.id, attempt, now + backoffMillis(attempt))
+            } catch (e: Exception) {
+                val attempt = event.attempts + 1
+                database.markEventFailed(operation.kind, event.id, attempt, now + backoffMillis(attempt))
+            }
+        }
+        return database.pendingEvents(now).any { it.kind == WearDatabase.EVENT_KIND_SUSPECTED }
+    }
+
+    /**
+     * Sends decision events whose suspected event has been cloud-ACKed.
+     * Returns true if more decision events remain pending.
+     */
+    private suspend fun sendEligibleDecisionEvents(node: Node): Boolean {
+        val now = System.currentTimeMillis()
+        val pending = database.pendingEvents(now)
+        var hasMore = false
+        for (operation in pending) {
+            if (operation.kind != WearDatabase.EVENT_KIND_DECISION) continue
+            val event = operation.event
+            // Only send if suspected event is confirmed
+            if (!database.isSuspectedEventConfirmed(event.id)) {
+                hasMore = true
+                continue
+            }
+            val (route, envelope) = BackendEndpointContract.decisionPath(event.id) to BackendEndpointContract.eventDecisionEnvelope(event)
+            val bytes = envelope.toString().toByteArray(Charsets.UTF_8)
+            try {
+                messageClient.sendMessage(node.id, route, bytes).awaitResult()
+                val attempt = event.attempts + 1
+                database.markEventSent(operation.kind, event.id, attempt, now + backoffMillis(attempt))
+            } catch (e: Exception) {
+                val attempt = event.attempts + 1
+                database.markEventFailed(operation.kind, event.id, attempt, now + backoffMillis(attempt))
+            }
+        }
+        return database.pendingEvents(now).any { it.kind == WearDatabase.EVENT_KIND_DECISION }
     }
 
     /**

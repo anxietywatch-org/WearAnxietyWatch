@@ -384,4 +384,129 @@ db.upsertSosCancelEvent(cancelled)
         val json = org.json.JSONObject(payload)
         return json.getDouble("bpm")
     }
+
+    @Test
+    fun `isTelemetryWindowConfirmed returns false when batches are pending`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 100_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        // Insert a batch covering the window but not confirmed
+        db.upsertBatch(
+            StoredBatch(
+                batchId = "batch-1",
+                fromMillis = 50_000L,
+                toMillis = 100_000L,
+                state = SyncState.SENT,
+                payload = "{}",
+                attempts = 1,
+                nextAttemptAt = 0L,
+                remoteAck = false,
+            ),
+        )
+
+        assertTrue(!db.isTelemetryWindowConfirmed(event))
+    }
+
+    @Test
+    fun `isTelemetryWindowConfirmed returns true when all covering batches confirmed`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 100_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        // Insert a batch covering the window and confirm it
+        db.upsertBatch(
+            StoredBatch(
+                batchId = "batch-1",
+                fromMillis = 50_000L,
+                toMillis = 100_000L,
+                state = SyncState.SENT,
+                payload = "{}",
+                attempts = 1,
+                nextAttemptAt = 0L,
+                remoteAck = false,
+            ),
+        )
+        db.markBatchConfirmed("batch-1")
+
+        assertTrue(db.isTelemetryWindowConfirmed(event))
+    }
+
+    @Test
+    fun `isTelemetryWindowConfirmed returns true when no batches cover window`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 100_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        // No batches covering the window -> vacuously true (empty window)
+        assertTrue(db.isTelemetryWindowConfirmed(event))
+    }
+
+    @Test
+    fun `isSuspectedEventConfirmed returns false for queued suspected`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+        assertTrue(!db.isSuspectedEventConfirmed(event.id))
+    }
+
+    @Test
+    fun `isSuspectedEventConfirmed returns true after markEventConfirmed`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+        db.markEventConfirmed(WearDatabase.EVENT_KIND_SUSPECTED, event.id)
+        assertTrue(db.isSuspectedEventConfirmed(event.id))
+    }
+
+    @Test
+    fun `isDecisionEventConfirmed returns false for queued decision`() {
+        val event = PendingEvent(
+            id = "decision-1",
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.INTERVENTION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+            userResponse = com.anxietywatch.wear.domain.UserResponse.USER_OK,
+            endedAtEpochMillis = 2_000L,
+        )
+        db.upsertDecisionEvent(event)
+        assertTrue(!db.isDecisionEventConfirmed(event.id))
+    }
+
+    @Test
+    fun `isDecisionEventConfirmed returns true after markEventConfirmed`() {
+        val event = PendingEvent(
+            id = "decision-2",
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.INTERVENTION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+            userResponse = com.anxietywatch.wear.domain.UserResponse.USER_OK,
+            endedAtEpochMillis = 2_000L,
+        )
+        db.upsertDecisionEvent(event)
+        db.markEventConfirmed(WearDatabase.EVENT_KIND_DECISION, event.id)
+        assertTrue(db.isDecisionEventConfirmed(event.id))
+    }
 }

@@ -420,7 +420,8 @@ class WearRuntime(context: Context) {
             endedAtEpochMillis = System.currentTimeMillis(),
         )
         database.upsertDecisionEvent(decision)
-        outbox.requestSync()
+        // Do NOT request sync here. Decision will be sent only after suspected event ACK.
+        // Sync will be triggered when suspected event receives cloud ACK.
     }
 
     private fun updateActiveEvent(state: MonitoringState, response: UserResponse) {
