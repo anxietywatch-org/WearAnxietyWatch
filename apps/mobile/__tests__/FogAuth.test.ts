@@ -10,7 +10,7 @@ jest.mock('react-native', () => {
   return RN;
 });
 
-import { login, restoreAuth } from '../src/fog/auth';
+import { acceptByCode, login, restoreAuth } from '../src/fog/auth';
 import type { AuthResult } from '../src/fog/types';
 
 const WearFog = NativeModules.WearFog as {
@@ -79,4 +79,38 @@ it('conserva temporalmente una sesión vigente si no hay red', async () => {
 
   await expect(restoreAuth()).resolves.toEqual(auth);
   expect(WearFog.clearAuth).not.toHaveBeenCalled();
+});
+
+it('acepta un código de vinculación y persiste la sesión nueva', async () => {
+  const linked = { ...auth, token: 'linked-token' };
+  fetchMock.mockResolvedValue(response(200, linked));
+
+  await expect(
+    acceptByCode(' aw-rnxa-gvep-bwmw ', 'dev-1', 'jwt-token'),
+  ).resolves.toEqual(linked);
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    'https://api.mangoon.xyz/api/tokens/accept-by-code',
+    expect.objectContaining({
+      headers: expect.objectContaining({
+        Authorization: 'Bearer jwt-token',
+      }),
+      body: JSON.stringify({
+        code: 'AW-RNXA-GVEP-BWMW',
+        deviceId: 'dev-1',
+      }),
+    }),
+  );
+  expect(WearFog.setAuth).toHaveBeenCalledWith(JSON.stringify(linked));
+});
+
+it('falla cuando el código es rechazado por el API', async () => {
+  fetchMock.mockResolvedValue(
+    response(400, { detail: 'Código inválido o expirado.' }),
+  );
+
+  await expect(
+    acceptByCode('AW-INVALID-CODE', 'dev-1', 'jwt-token'),
+  ).rejects.toThrow('Código inválido o expirado.');
+  expect(WearFog.setAuth).not.toHaveBeenCalled();
 });
