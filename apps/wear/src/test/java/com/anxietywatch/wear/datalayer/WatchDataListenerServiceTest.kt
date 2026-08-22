@@ -38,6 +38,22 @@ class WatchDataListenerServiceTest {
     }
 
     @Test
+    fun `listener recognizes exact suspected ack path`() {
+        assertEquals(
+            "SUSPECTED",
+            WatchDataListenerService.ackKind("/fog/v1/ack/events/suspected/event-abc")?.name,
+        )
+    }
+
+    @Test
+    fun `listener recognizes exact decision ack path`() {
+        assertEquals(
+            "DECISION",
+            WatchDataListenerService.ackKind("/fog/v1/ack/events/decision/event-def")?.name,
+        )
+    }
+
+    @Test
     fun `telemetry route is the fog endpoint plus batch id`() {
         assertEquals("/fog/v1/telemetry/batch-123", BackendEndpointContract.telemetryPath("batch-123"))
         assertEquals("/fog/v1/telemetry", BackendEndpointContract.TELEMETRY_ENDPOINT)
