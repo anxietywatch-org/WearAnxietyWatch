@@ -30,11 +30,17 @@ import kotlin.random.Random
  * llama al API. Cuando el teléfono confirma la entrega responde ACK por
  * identificador (`/fog/v1/ack/telemetry/{batchId}`, ...) y el estado pasa a CONFIRMED.
  */
-class OutboxSyncer(
+internal interface OutboxTransport {
+    suspend fun sendData(nodeId: String, route: String, payload: ByteArray)
+    suspend fun sendMessage(nodeId: String, route: String, payload: ByteArray)
+}
+
+class OutboxSyncer internal constructor(
     private val context: Context,
     private val database: WearDatabase,
     private val connectionObserver: PhoneConnectionObserver,
     private val scope: CoroutineScope,
+    private val transportOverride: OutboxTransport? = null,
 ) {
     private val trigger = Channel<Unit>(Channel.CONFLATED)
     private var job: Job? = null
@@ -55,6 +61,10 @@ class OutboxSyncer(
 
     fun requestSync() {
         trigger.trySend(Unit)
+    }
+
+    internal suspend fun syncOnceForTest(nodeId: String) {
+        runSyncCycle(nodeId)
     }
 
 suspend fun dispatchEventNow(event: PendingEvent) {
@@ -98,8 +108,8 @@ suspend fun dispatchEventNow(event: PendingEvent) {
         }
     }
 
-private suspend fun runSyncCycle() {
-        val node = connectedNode() ?: return
+private suspend fun runSyncCycle(nodeId: String? = null) {
+        val node = nodeId ?: connectedNode()?.id ?: return
         announceIfNeeded(node)
         // 1. Explicit SOS/SOS_CANCEL always eligible (emergency operations)
         sendPendingSosOperations(node)
@@ -117,7 +127,7 @@ private suspend fun runSyncCycle() {
      * These are emergency operations that must NEVER be blocked by telemetry,
      * suspected, or decision dependencies. They have their own independent retry/ACK logic.
      */
-    private suspend fun sendPendingSosOperations(node: Node) {
+    private suspend fun sendPendingSosOperations(node: String) {
         val now = System.currentTimeMillis()
         val pending = database.pendingEvents(now)
         for (operation in pending) {
@@ -131,7 +141,7 @@ private suspend fun runSyncCycle() {
             }
             val bytes = envelope.toString().toByteArray(Charsets.UTF_8)
             try {
-                messageClient.sendMessage(node.id, route, bytes).awaitResult()
+                sendMessage(node, route, bytes)
                 val attempt = event.attempts + 1
                 database.markEventSent(operation.kind, event.id, attempt, now + backoffMillis(attempt))
             } catch (e: Exception) {
@@ -145,7 +155,7 @@ private suspend fun runSyncCycle() {
      * Sends suspected events whose telemetry window has been cloud-ACKed.
      * Returns true if more suspected events remain pending.
      */
-    private suspend fun sendEligibleSuspectedEvents(node: Node): Boolean {
+    private suspend fun sendEligibleSuspectedEvents(node: String): Boolean {
         val now = System.currentTimeMillis()
         val pending = database.pendingEvents(now)
         var hasMore = false
@@ -160,7 +170,7 @@ private suspend fun runSyncCycle() {
             val (route, envelope) = BackendEndpointContract.suspectedPath(event.id) to BackendEndpointContract.suspectedEventEnvelope(event)
             val bytes = envelope.toString().toByteArray(Charsets.UTF_8)
             try {
-                messageClient.sendMessage(node.id, route, bytes).awaitResult()
+                sendMessage(node, route, bytes)
                 val attempt = event.attempts + 1
                 database.markEventSent(operation.kind, event.id, attempt, now + backoffMillis(attempt))
             } catch (e: Exception) {
@@ -175,7 +185,7 @@ private suspend fun runSyncCycle() {
      * Sends decision events whose suspected event has been cloud-ACKed.
      * Returns true if more decision events remain pending.
      */
-    private suspend fun sendEligibleDecisionEvents(node: Node): Boolean {
+    private suspend fun sendEligibleDecisionEvents(node: String): Boolean {
         val now = System.currentTimeMillis()
         val pending = database.pendingEvents(now)
         var hasMore = false
@@ -190,7 +200,7 @@ private suspend fun runSyncCycle() {
             val (route, envelope) = BackendEndpointContract.decisionPath(event.id) to BackendEndpointContract.eventDecisionEnvelope(event)
             val bytes = envelope.toString().toByteArray(Charsets.UTF_8)
             try {
-                messageClient.sendMessage(node.id, route, bytes).awaitResult()
+                sendMessage(node, route, bytes)
                 val attempt = event.attempts + 1
                 database.markEventSent(operation.kind, event.id, attempt, now + backoffMillis(attempt))
             } catch (e: Exception) {
@@ -205,15 +215,15 @@ private suspend fun runSyncCycle() {
      * Anuncia una sola vez por nodo que este reloj habla el protocolo fog
      * `fog_watch_v1` (sobre `/fog/v1/capabilities`).
      */
-    private suspend fun announceIfNeeded(node: Node) {
-        if (node.id in announcedNodes) return
+    private suspend fun announceIfNeeded(node: String) {
+        if (node in announcedNodes) return
         val envelope = BackendEndpointContract
             .capabilitiesEnvelope(android.os.Build.MODEL, android.os.Build.VERSION.RELEASE)
             .toString()
             .toByteArray(Charsets.UTF_8)
         try {
-            dataClient.putDataItem(urgentItem(BackendEndpointContract.CAPABILITIES_ENDPOINT, envelope)).awaitResult()
-            announcedNodes.add(node.id)
+            sendData(node, BackendEndpointContract.CAPABILITIES_ENDPOINT, envelope)
+            announcedNodes.add(node)
         } catch (_: Exception) {
         }
     }
@@ -226,7 +236,7 @@ private suspend fun runSyncCycle() {
         }
     }
 
-private suspend fun sendPendingEvents(node: Node): Boolean {
+    private suspend fun sendPendingEvents(node: String): Boolean {
         val now = System.currentTimeMillis()
         val pending = database.pendingEvents(now)
         for (operation in pending) {
@@ -244,7 +254,7 @@ private suspend fun sendPendingEvents(node: Node): Boolean {
             }
             val bytes = envelope.toString().toByteArray(Charsets.UTF_8)
             try {
-                messageClient.sendMessage(node.id, route, bytes).awaitResult()
+                sendMessage(node, route, bytes)
                 val attempt = event.attempts + 1
                 database.markEventSent(operation.kind, event.id, attempt, now + backoffMillis(attempt))
             } catch (e: Exception) {
@@ -255,13 +265,13 @@ private suspend fun sendPendingEvents(node: Node): Boolean {
         return database.pendingEvents(now).isNotEmpty()
     }
 
-    private suspend fun sendOutstandingBatches(node: Node): Boolean {
+    private suspend fun sendOutstandingBatches(node: String): Boolean {
         val now = System.currentTimeMillis()
         val outstanding = database.pendingBatches(now)
         for (batch in outstanding) {
             val route = BackendEndpointContract.telemetryPath(batch.batchId)
             try {
-                dataClient.putDataItem(urgentItem(route, batch.payload.toByteArray())).awaitResult()
+                sendData(node, route, batch.payload.toByteArray())
                 val attempt = batch.attempts + 1
                 database.upsertBatch(
                     batch.copy(
@@ -278,7 +288,7 @@ private suspend fun sendPendingEvents(node: Node): Boolean {
         return database.pendingBatches(now).isNotEmpty()
     }
 
-    private suspend fun sendNewTelemetryBatches(node: Node): Boolean {
+    private suspend fun sendNewTelemetryBatches(node: String): Boolean {
         var limit = MAX_TELEMETRY_PER_BATCH
         var pending = database.pendingTelemetry(limit)
         if (pending.isEmpty()) return false
@@ -295,7 +305,7 @@ private suspend fun sendPendingEvents(node: Node): Boolean {
         }
         val route = BackendEndpointContract.telemetryPath(batchId)
         try {
-            dataClient.putDataItem(urgentItem(route, payload.toByteArray())).awaitResult()
+            sendData(node, route, payload.toByteArray())
             val now = System.currentTimeMillis()
             database.upsertBatch(
                 StoredBatch(
@@ -314,6 +324,16 @@ private suspend fun sendPendingEvents(node: Node): Boolean {
             database.markTelemetryFailed(pending.map { it.id })
         }
         return true
+    }
+
+    private suspend fun sendMessage(node: String, route: String, payload: ByteArray) {
+        transportOverride?.sendMessage(node, route, payload)
+            ?: messageClient.sendMessage(node, route, payload).awaitResult()
+    }
+
+    private suspend fun sendData(node: String, route: String, payload: ByteArray) {
+        transportOverride?.sendData(node, route, payload)
+            ?: dataClient.putDataItem(urgentItem(route, payload)).awaitResult()
     }
 
     private fun urgentItem(route: String, payload: ByteArray) =
