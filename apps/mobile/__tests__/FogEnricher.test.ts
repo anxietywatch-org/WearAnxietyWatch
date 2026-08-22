@@ -1,6 +1,8 @@
 import {
+  enrichEventDecision,
   enrichSos,
   enrichSosCancel,
+  enrichSuspectedEvent,
   enrichTelemetry,
   parseEnvelope,
 } from '../src/fog/enricher';
@@ -57,6 +59,39 @@ describe('parseEnvelope', () => {
       }),
     );
     expect(parsed?.targetEndpoint).toBe('/fog/v1/sos/cancel');
+  });
+
+  test('accepts a suspected event envelope', () => {
+    const parsed = parseEnvelope(
+      JSON.stringify({
+        schemaVersion: 'wear-suspected-event-v1',
+        targetEndpoint: '/fog/v1/events/suspected',
+        transport: 'WEAR_DATA_LAYER',
+        eventId: 'evt-1',
+        detectedAt: '2026-08-10T21:08:00Z',
+        state: 'USER_VALIDATION',
+        score: 0.88,
+        rulesVersion: 'rules-v2',
+        features: null,
+        baseline: null,
+      }),
+    );
+    expect(parsed?.targetEndpoint).toBe('/fog/v1/events/suspected');
+  });
+
+  test('accepts an event decision envelope', () => {
+    const parsed = parseEnvelope(
+      JSON.stringify({
+        schemaVersion: 'wear-event-decision-v1',
+        targetEndpoint: '/fog/v1/events/decision',
+        transport: 'WEAR_DATA_LAYER',
+        eventId: 'evt-1',
+        detectedAt: '2026-08-10T21:08:00Z',
+        respondedAt: '2026-08-10T21:09:00Z',
+        response: 'SUPPORT_REQUESTED',
+      }),
+    );
+    expect(parsed?.targetEndpoint).toBe('/fog/v1/events/decision');
   });
 
   test('rejects unknown envelopes', () => {
@@ -199,5 +234,75 @@ describe('enrichSosCancel', () => {
     expect(payload.deviceId).toBe('device-1');
     expect(payload.cancelledAt).toBe('2026-08-10T21:07:00.000Z');
     expect(payload.reason).toBe('User cancelled');
+  });
+});
+
+describe('enrichSuspectedEvent', () => {
+  test('maps detection snapshot to the public DTO', () => {
+    const payload = enrichSuspectedEvent(
+      {
+        schemaVersion: 'wear-suspected-event-v1',
+        targetEndpoint: '/fog/v1/events/suspected',
+        transport: 'WEAR_DATA_LAYER',
+        eventId: 'evt-1',
+        detectedAt: '2026-08-10T21:08:00Z',
+        state: 'USER_VALIDATION',
+        score: 0.88,
+        rulesVersion: 'rules-v2',
+        features: {
+          heartRateMean: 96,
+          heartRateMax: 108,
+          heartRateSlopeBpmPerMinute: 1.2,
+          heartRateDeltaFromBaseline: 12,
+          rmssdMillis: 21,
+          sdnnMillis: 30,
+          movementMagnitudeMean: 0.05,
+          movementVariance: 0.0004,
+          validSampleRatio: 0.95,
+          lastSampleAgeSeconds: 5,
+          sampleCount: 60,
+        },
+        baseline: {
+          sampleCount: 240,
+          meanHeartRate: 82,
+          heartRateM2: 310,
+          updatedAtEpochMillis: 1780000000000,
+        },
+        mobileEnrichmentRequired: ['userId', 'deviceId', 'sessionId', 'sequence'],
+      },
+      identity,
+    );
+    expect(payload.eventId).toBe('evt-1');
+    expect(payload.userId).toBe('user-1');
+    expect(payload.sessionId).toBe('session-1');
+    expect(payload.sequence).toBe(7);
+    expect(payload.score).toBe(0.88);
+    expect(payload.features?.sampleCount).toBe(60);
+    expect(payload.features?.heartRateDeltaFromBaseline).toBe(12);
+    expect(payload.baseline?.sampleCount).toBe(240);
+  });
+});
+
+describe('enrichEventDecision', () => {
+  test('maps primary decision to the public DTO', () => {
+    const payload = enrichEventDecision(
+      {
+        schemaVersion: 'wear-event-decision-v1',
+        targetEndpoint: '/fog/v1/events/decision',
+        transport: 'WEAR_DATA_LAYER',
+        eventId: 'evt-1',
+        detectedAt: '2026-08-10T21:08:00Z',
+        respondedAt: '2026-08-10T21:09:00Z',
+        response: 'SUPPORT_REQUESTED',
+        mobileEnrichmentRequired: ['userId', 'deviceId', 'sessionId', 'sequence'],
+      },
+      identity,
+    );
+    expect(payload.eventId).toBe('evt-1');
+    expect(payload.userId).toBe('user-1');
+    expect(payload.deviceId).toBe('device-1');
+    expect(payload.sessionId).toBe('session-1');
+    expect(payload.response).toBe('SUPPORT_REQUESTED');
+    expect(payload.respondedAt).toBe('2026-08-10T21:09:00.000Z');
   });
 });

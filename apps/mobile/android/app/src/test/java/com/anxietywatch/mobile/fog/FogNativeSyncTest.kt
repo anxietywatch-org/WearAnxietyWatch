@@ -184,7 +184,6 @@ class FogNativeSyncTest {
 
     @Test fun nonDeliverableKindsAreDiscarded() {
         dao.insert(FogOutboxEntry(kind = "capabilities", entityId = "capabilities", payload = "{}"))
-        dao.insert(FogOutboxEntry(kind = "suspected", entityId = "evt-1", payload = "{}"))
         val posts = java.util.concurrent.atomic.AtomicInteger()
         val outcome = FogNativeSync.run(
             context, "token", identity.toString(),
@@ -194,6 +193,65 @@ class FogNativeSyncTest {
         )
         assertEquals(FogNativeSync.Outcome.COMPLETE, outcome)
         assertEquals(0, posts.get())
+        assertEquals(0, dao.countRemaining())
+    }
+
+    @Test fun suspectedRequestCarriesDetectionSnapshot() {
+        val envelope = JSONObject().put("targetEndpoint", "/fog/v1/events/suspected")
+            .put("eventId", "evt-1").put("detectedAt", "2026-08-13T10:00:00Z")
+            .put("state", "USER_VALIDATION").put("score", 0.88).put("rulesVersion", "rules-v2")
+            .put("features", JSONObject().put("heartRateMean", 96.0).put("sampleCount", 60))
+            .put("baseline", JSONObject().put("sampleCount", 240).put("meanHeartRate", 82.0))
+        val request = FogNativeSync.requestFor(
+            FogOutboxEntry(kind = "suspected", entityId = "evt-1", payload = envelope.toString()),
+            identity,
+        )!!
+        assertEquals("/api/v1/events/suspected", request.first)
+        assertEquals("evt-1", request.second.getString("eventId"))
+        assertEquals("user-1", request.second.getString("userId"))
+        assertEquals("session-1", request.second.getString("sessionId"))
+        assertEquals(7L, request.second.getLong("sequence"))
+        assertEquals(0.88, request.second.getDouble("score"), 0.0)
+        assertEquals(60, request.second.getJSONObject("features").getInt("sampleCount"))
+        assertEquals(240, request.second.getJSONObject("baseline").getInt("sampleCount"))
+    }
+
+    @Test fun decisionRequestCarriesPrimaryResponse() {
+        val envelope = JSONObject().put("targetEndpoint", "/fog/v1/events/decision")
+            .put("eventId", "evt-1").put("detectedAt", "2026-08-13T10:00:00Z")
+            .put("respondedAt", "2026-08-13T10:01:00Z").put("response", "SUPPORT_REQUESTED")
+        val request = FogNativeSync.requestFor(
+            FogOutboxEntry(kind = "decision", entityId = "evt-1", payload = envelope.toString()),
+            identity,
+        )!!
+        assertEquals("/api/v1/events/decision", request.first)
+        assertEquals("SUPPORT_REQUESTED", request.second.getString("response"))
+        assertEquals("2026-08-13T10:01:00Z", request.second.getString("respondedAt"))
+        assertEquals("user-1", request.second.getString("userId"))
+    }
+
+    @Test fun suspectedAndDecisionAreDeliveredAndAcked() {
+        dao.insert(FogOutboxEntry(kind = "suspected", entityId = "evt-1", payload = JSONObject()
+            .put("targetEndpoint", "/fog/v1/events/suspected").put("eventId", "evt-1")
+            .put("detectedAt", "2026-08-13T10:00:00Z").put("state", "USER_VALIDATION")
+            .put("score", 0.88).put("rulesVersion", "rules-v2")
+            .put("features", JSONObject.NULL).put("baseline", JSONObject.NULL).toString()))
+        dao.insert(FogOutboxEntry(kind = "decision", entityId = "evt-1", payload = JSONObject()
+            .put("targetEndpoint", "/fog/v1/events/decision").put("eventId", "evt-1")
+            .put("detectedAt", "2026-08-13T10:00:00Z").put("respondedAt", "2026-08-13T10:01:00Z")
+            .put("response", "SUPPORT_REQUESTED").toString()))
+        val routes = mutableListOf<String>()
+        val posts = java.util.concurrent.atomic.AtomicInteger()
+        val outcome = FogNativeSync.run(
+            context, "token", identity.toString(),
+            httpPost = FogNativeSync.HttpPost { _, _, _ -> posts.incrementAndGet(); 202 },
+            ackToWear = FogNativeSync.AckToWear { route -> routes.add(route); true },
+            dao = dao,
+        )
+        assertEquals(FogNativeSync.Outcome.COMPLETE, outcome)
+        assertEquals(2, posts.get())
+        assertTrue(routes.any { it == "/fog/v1/ack/events/suspected/evt-1" })
+        assertTrue(routes.any { it == "/fog/v1/ack/events/decision/evt-1" })
         assertEquals(0, dao.countRemaining())
     }
 

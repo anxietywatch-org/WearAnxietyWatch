@@ -1,11 +1,15 @@
 import type {
+  EventDecisionPayload,
   FogIdentity,
   SosCancelPayload,
   SosTriggerPayload,
+  SuspectedEventPayload,
   TelemetryBatchPayload,
   TelemetrySample,
+  WearEventDecisionEnvelope,
   WearSosCancelEnvelope,
   WearSosEnvelope,
+  WearSuspectedEventEnvelope,
   WearTelemetryEnvelope,
 } from './types';
 
@@ -166,10 +170,51 @@ export function enrichSosCancel(
   };
 }
 
+function jsonOrNull<T>(value: unknown): T | null {
+  return value === null || value === undefined ? null : (value as T);
+}
+
+export function enrichSuspectedEvent(
+  envelope: WearSuspectedEventEnvelope,
+  identity: FogIdentity,
+): SuspectedEventPayload {
+  return {
+    eventId: envelope.eventId,
+    userId: identity.userId,
+    deviceId: identity.deviceId,
+    sessionId: identity.sessionId,
+    sequence: identity.sequence,
+    detectedAt: iso(envelope.detectedAt),
+    state: envelope.state,
+    score: envelope.score,
+    rulesVersion: envelope.rulesVersion,
+    features: jsonOrNull(envelope.features),
+    baseline: jsonOrNull(envelope.baseline),
+  };
+}
+
+export function enrichEventDecision(
+  envelope: WearEventDecisionEnvelope,
+  identity: FogIdentity,
+): EventDecisionPayload {
+  return {
+    eventId: envelope.eventId,
+    userId: identity.userId,
+    deviceId: identity.deviceId,
+    sessionId: identity.sessionId,
+    sequence: identity.sequence,
+    detectedAt: iso(envelope.detectedAt),
+    respondedAt: iso(envelope.respondedAt),
+    response: envelope.response,
+  };
+}
+
 export type FogEnvelope =
   | WearTelemetryEnvelope
   | WearSosEnvelope
-  | WearSosCancelEnvelope;
+  | WearSosCancelEnvelope
+  | WearSuspectedEventEnvelope
+  | WearEventDecisionEnvelope;
 
 export function parseEnvelope(raw: string): FogEnvelope | null {
   try {
@@ -185,6 +230,18 @@ export function parseEnvelope(raw: string): FogEnvelope | null {
       'cancelled' in parsed
     )
       return parsed;
+    if (
+      parsed.targetEndpoint === '/fog/v1/events/suspected' &&
+      'detectedAt' in parsed &&
+      'score' in parsed
+    )
+      return parsed;
+    if (
+      parsed.targetEndpoint === '/fog/v1/events/decision' &&
+      'detectedAt' in parsed &&
+      'response' in parsed
+    )
+      return parsed;
     return null;
   } catch {
     return null;
@@ -197,7 +254,11 @@ export const FogEndpoints = {
   TELEMETRY_BATCH: '/api/v1/telemetry/batch',
   SOS_TRIGGER: '/api/v1/sos/trigger',
   SOS_CANCEL: '/api/v1/sos/cancel',
+  SUSPECTED_EVENT: '/api/v1/events/suspected',
+  EVENT_DECISION: '/api/v1/events/decision',
   ACK_TELEMETRY_PREFIX: '/fog/v1/ack/telemetry/',
   ACK_SOS_PREFIX: '/fog/v1/ack/sos/',
   ACK_SOS_CANCEL_PREFIX: '/fog/v1/ack/sos-cancel/',
+  ACK_SUSPECTED_PREFIX: '/fog/v1/ack/events/suspected/',
+  ACK_DECISION_PREFIX: '/fog/v1/ack/events/decision/',
 };

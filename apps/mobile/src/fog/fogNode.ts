@@ -35,7 +35,7 @@ export interface FogNodeState {
 export type FogStateListener = (state: FogNodeState) => void;
 
 const BASE_URL = FogEndpoints.API_BASE;
-const DELIVERABLE_KINDS = ['telemetry', 'sos', 'sos-cancel'];
+const DELIVERABLE_KINDS = ['telemetry', 'sos', 'sos-cancel', 'suspected', 'decision'];
 
 /**
  * Orquestador del nodo fog.
@@ -284,6 +284,12 @@ class FogNode {
       }
       if (entry.kind === 'sos-cancel') {
         return (await WearFog.ackSosCancel(entry.entityId)) === true;
+      }
+      if (entry.kind === 'suspected') {
+        return (await WearFog.ackSuspected(entry.entityId)) === true;
+      }
+      if (entry.kind === 'decision') {
+        return (await WearFog.ackDecision(entry.entityId)) === true;
       }
       return false;
     } catch {

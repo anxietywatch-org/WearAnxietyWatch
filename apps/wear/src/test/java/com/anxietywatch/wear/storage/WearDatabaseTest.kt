@@ -3,11 +3,16 @@ package com.anxietywatch.wear.storage
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.anxietywatch.wear.domain.BaselineSnapshot
+import com.anxietywatch.wear.domain.DerivedFeatures
 import com.anxietywatch.wear.domain.MonitoringState
 import com.anxietywatch.wear.domain.PendingEvent
 import com.anxietywatch.wear.domain.SensorReading
+import com.anxietywatch.wear.domain.UserResponse
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -79,7 +84,7 @@ class WearDatabaseTest {
             triggerScore = 0.9,
             rulesVersion = "rules-v2",
         )
-        db.upsertEvent(event)
+        db.upsertSosEvent(event)
         assertTrue(db.pendingEvents(now = Long.MAX_VALUE).any { it.event.id == event.id })
 
         db.markEventConfirmed(WearDatabase.EVENT_KIND_SOS, event.id)
@@ -114,7 +119,7 @@ class WearDatabaseTest {
             triggerScore = 0.9,
             rulesVersion = "rules-v2",
         )
-        db.upsertEvent(event)
+db.upsertSosEvent(event)
         db.markEventSent(
             WearDatabase.EVENT_KIND_SOS,
             event.id,
@@ -128,7 +133,7 @@ class WearDatabaseTest {
             userResponse = com.anxietywatch.wear.domain.UserResponse.SOS_CANCELLED,
             endedAtEpochMillis = 2_000L,
         )
-        db.upsertEvent(cancelled)
+db.upsertSosCancelEvent(cancelled)
 
         val pending = db.pendingEvents(now = Long.MAX_VALUE)
             .first { it.kind == WearDatabase.EVENT_KIND_SOS_CANCEL && it.event.id == event.id }
@@ -149,6 +154,308 @@ class WearDatabaseTest {
             arrayOf(WearDatabase.EVENT_KIND_SOS, event.id),
         ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
         assertEquals(SyncState.SENT.name, sosState)
+    }
+
+    @Test
+    fun `suspected detection is persisted and delivered as suspected, not sos`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.88,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        val pending = db.pendingEvents(now = Long.MAX_VALUE).first { it.event.id == event.id }
+        assertEquals(WearDatabase.EVENT_KIND_SUSPECTED, pending.kind)
+        assertEquals(MonitoringState.USER_VALIDATION, pending.event.state)
+
+        val sosRows = db.readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM events WHERE kind = ? AND id = ?",
+            arrayOf(WearDatabase.EVENT_KIND_SOS, event.id),
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else -1 }
+        assertEquals(0, sosRows)
+    }
+
+    @Test
+    fun `primary decision and suspected rows coexist for same event id`() {
+        val event = PendingEvent(
+            id = "shared-id",
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.INTERVENTION,
+            triggerScore = 0.88,
+            rulesVersion = "rules-v2",
+            userResponse = UserResponse.SUPPORT_REQUESTED,
+            endedAtEpochMillis = 2_000L,
+        )
+        db.upsertSuspectedEvent(event)
+        db.upsertDecisionEvent(event)
+
+        val pending = db.pendingEvents(now = Long.MAX_VALUE)
+            .filter { it.event.id == "shared-id" }
+        assertEquals(2, pending.size)
+        assertTrue(pending.any { it.kind == WearDatabase.EVENT_KIND_SUSPECTED })
+        assertTrue(pending.any { it.kind == WearDatabase.EVENT_KIND_DECISION })
+        val decision = pending.first { it.kind == WearDatabase.EVENT_KIND_DECISION }.event
+        assertEquals(UserResponse.SUPPORT_REQUESTED, decision.userResponse)
+    }
+
+    @Test
+    fun `primary decision is not overwritten by a later activity response`() {
+        val event = PendingEvent(
+            id = "shared-id",
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.INTERVENTION,
+            triggerScore = 0.88,
+            rulesVersion = "rules-v2",
+            userResponse = UserResponse.SUPPORT_REQUESTED,
+            endedAtEpochMillis = 2_000L,
+        )
+        db.upsertSuspectedEvent(event)
+        db.upsertDecisionEvent(event)
+
+        val later = event.copy(
+            state = MonitoringState.RESOLVED,
+            userResponse = UserResponse.BREATHING_HELPED,
+            endedAtEpochMillis = 5_000L,
+        )
+        db.upsertSuspectedEvent(later)
+
+        val decision = db.pendingEvents(now = Long.MAX_VALUE)
+            .first { it.kind == WearDatabase.EVENT_KIND_DECISION && it.event.id == "shared-id" }
+            .event
+        assertEquals(UserResponse.SUPPORT_REQUESTED, decision.userResponse)
+
+        val suspected = db.pendingEvents(now = Long.MAX_VALUE)
+            .first { it.kind == WearDatabase.EVENT_KIND_SUSPECTED && it.event.id == "shared-id" }
+            .event
+        assertEquals(UserResponse.BREATHING_HELPED, suspected.userResponse)
+    }
+
+    @Test
+    fun `suspected snapshot remains immutable after user response`() {
+        val eventId = "immutability-test-id"
+        val event = PendingEvent(
+            id = eventId,
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.88,
+            rulesVersion = "rules-v2",
+            features = DerivedFeatures(
+                heartRateMean = 96.0,
+                heartRateMax = 108.0,
+                heartRateSlopeBpmPerMinute = -5.5,
+                heartRateDeltaFromBaseline = 12.0,
+                rmssdMillis = 21.0,
+                sdnnMillis = 30.0,
+                movementMagnitudeMean = 0.05,
+                movementVariance = 0.0004,
+                validSampleRatio = 0.95,
+                lastSampleAgeSeconds = 5L,
+                sampleCount = 60,
+            ),
+            baseline = BaselineSnapshot(
+                sampleCount = 240L,
+                meanHeartRate = 82.0,
+                heartRateM2 = 310.0,
+                updatedAtEpochMillis = 2_900_000L,
+            ),
+        )
+        db.upsertSuspectedEvent(event)
+
+        // User responds before suspected ACK
+        val decision = event.copy(
+            userResponse = UserResponse.SUPPORT_REQUESTED,
+            endedAtEpochMillis = 2_000L,
+            state = MonitoringState.INTERVENTION,
+        )
+        db.upsertDecisionEvent(decision)
+
+        // Reload suspected from DB
+        val suspected = db.pendingEvents(now = Long.MAX_VALUE)
+            .first { it.kind == WearDatabase.EVENT_KIND_SUSPECTED && it.event.id == eventId }
+            .event
+
+        // Verify suspected snapshot remains IMMUTABLE (original detector state)
+        assertEquals(MonitoringState.USER_VALIDATION, suspected.state)
+        assertEquals(1_000L, suspected.startedAtEpochMillis)
+        assertEquals(0.88, suspected.triggerScore, 0.001)
+        assertEquals("rules-v2", suspected.rulesVersion)
+        assertEquals(-5.5, suspected.features!!.heartRateSlopeBpmPerMinute!!, 0.001)
+        assertEquals(96.0, suspected.features!!.heartRateMean!!, 0.001)
+        assertEquals(108.0, suspected.features!!.heartRateMax!!, 0.001)
+        assertEquals(12.0, suspected.features!!.heartRateDeltaFromBaseline!!, 0.001)
+        assertEquals(21.0, suspected.features!!.rmssdMillis!!, 0.001)
+        assertEquals(30.0, suspected.features!!.sdnnMillis!!, 0.001)
+        assertEquals(0.05, suspected.features!!.movementMagnitudeMean!!, 0.001)
+        assertEquals(0.0004, suspected.features!!.movementVariance!!, 0.001)
+        assertEquals(0.95, suspected.features!!.validSampleRatio!!, 0.001)
+        assertEquals(5L, suspected.features!!.lastSampleAgeSeconds)
+        assertEquals(60, suspected.features!!.sampleCount)
+        assertEquals(240L, suspected.baseline!!.sampleCount)
+        assertEquals(82.0, suspected.baseline!!.meanHeartRate, 0.001)
+        assertEquals(310.0, suspected.baseline!!.heartRateM2, 0.001)
+        assertEquals(2_900_000L, suspected.baseline!!.updatedAtEpochMillis)
+
+        // Decision row contains user response
+        val decisionRow = db.pendingEvents(now = Long.MAX_VALUE)
+            .first { it.kind == WearDatabase.EVENT_KIND_DECISION && it.event.id == eventId }
+            .event
+        assertEquals(UserResponse.SUPPORT_REQUESTED, decisionRow.userResponse)
+        assertEquals(MonitoringState.INTERVENTION, decisionRow.state)
+        assertNotNull(decisionRow.endedAtEpochMillis)
+        assertEquals(eventId, decisionRow.id)
+    }
+
+    @Test
+    fun `immutable suspected snapshot with USER_OK`() {
+        val eventId = "immutability-user-ok"
+        val event = PendingEvent(
+            id = eventId,
+            startedAtEpochMillis = 2_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.75,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        val decision = event.copy(
+            userResponse = UserResponse.USER_OK,
+            endedAtEpochMillis = 3_000L,
+            state = MonitoringState.COOLDOWN,
+        )
+        db.upsertDecisionEvent(decision)
+
+        val suspected = db.pendingEvents(now = Long.MAX_VALUE)
+            .first { it.kind == WearDatabase.EVENT_KIND_SUSPECTED && it.event.id == eventId }
+            .event
+
+        assertEquals(MonitoringState.USER_VALIDATION, suspected.state)
+    }
+
+    @Test
+    fun `immutable suspected snapshot with ACTIVITY_CONFIRMED`() {
+        val eventId = "immutability-activity"
+        val event = PendingEvent(
+            id = eventId,
+            startedAtEpochMillis = 3_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.85,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        val decision = event.copy(
+            userResponse = UserResponse.ACTIVITY_CONFIRMED,
+            endedAtEpochMillis = 4_000L,
+            state = MonitoringState.COOLDOWN,
+        )
+        db.upsertDecisionEvent(decision)
+
+        val suspected = db.pendingEvents(now = Long.MAX_VALUE)
+            .first { it.kind == WearDatabase.EVENT_KIND_SUSPECTED && it.event.id == eventId }
+            .event
+
+        assertEquals(MonitoringState.USER_VALIDATION, suspected.state)
+    }
+
+    @Test
+    fun `immutable suspected snapshot persists derived features`() {
+        val event = PendingEvent(
+            id = "snapshot-id",
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.88,
+            rulesVersion = "rules-v2",
+            features = DerivedFeatures(
+                heartRateMean = 96.0,
+                heartRateMax = 108.0,
+                heartRateSlopeBpmPerMinute = 1.2,
+                heartRateDeltaFromBaseline = 12.0,
+                rmssdMillis = 21.0,
+                sdnnMillis = 30.0,
+                movementMagnitudeMean = 0.05,
+                movementVariance = 0.0004,
+                validSampleRatio = 0.95,
+                lastSampleAgeSeconds = 5L,
+                sampleCount = 60,
+            ),
+            baseline = BaselineSnapshot(
+                sampleCount = 240L,
+                meanHeartRate = 82.0,
+                heartRateM2 = 310.0,
+                updatedAtEpochMillis = 900L,
+            ),
+        )
+        db.upsertSuspectedEvent(event)
+
+        val restored = db.pendingEvents(now = Long.MAX_VALUE)
+            .first { it.kind == WearDatabase.EVENT_KIND_SUSPECTED && it.event.id == "snapshot-id" }
+            .event
+        assertEquals(96.0, restored.features!!.heartRateMean!!, 0.001)
+        assertEquals(12.0, restored.features!!.heartRateDeltaFromBaseline!!, 0.001)
+        assertEquals(60, restored.features!!.sampleCount)
+        assertEquals(240L, restored.baseline!!.sampleCount)
+        assertEquals(82.0, restored.baseline!!.meanHeartRate!!, 0.001)
+        assertEquals(310.0, restored.baseline!!.heartRateM2!!, 0.001)
+        assertEquals(900L, restored.baseline!!.updatedAtEpochMillis)
+    }
+
+    @Test
+    fun `suspected and decision are acknowledged independently of sos`() {
+        val event = PendingEvent(
+            id = "shared-id",
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.88,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+        db.upsertDecisionEvent(event.copy(userResponse = UserResponse.USER_OK, endedAtEpochMillis = 2_000L))
+
+        db.markEventConfirmed(WearDatabase.EVENT_KIND_SUSPECTED, event.id)
+        val remaining = db.pendingEvents(now = Long.MAX_VALUE)
+            .filter { it.event.id == "shared-id" }
+        assertEquals(1, remaining.size)
+        assertEquals(WearDatabase.EVENT_KIND_DECISION, remaining.single().kind)
+
+        db.markEventConfirmed(WearDatabase.EVENT_KIND_DECISION, event.id)
+        assertTrue(db.pendingEvents(now = Long.MAX_VALUE).none { it.event.id == "shared-id" })
+    }
+
+    @Test
+    fun `database reopen keeps legacy events and optional detection snapshots`() {
+        val seed = WearDatabase(ApplicationProvider.getApplicationContext<Context>())
+        seed.writableDatabase
+        seed.close()
+
+        val path = ApplicationProvider
+            .getApplicationContext<Context>()
+            .getDatabasePath("anxietywatch-wear.db")
+        android.database.sqlite.SQLiteDatabase.openDatabase(
+            path.path,
+            null,
+            android.database.sqlite.SQLiteDatabase.OPEN_READWRITE,
+        ).use { raw ->
+            // The seed database already has the v5 snapshot columns. Keep its
+            // schema version consistent so this test exercises reopen/preserve
+            // behavior without pretending a v4 schema is present.
+            raw.execSQL("PRAGMA user_version = 5")
+            raw.execSQL(
+                "INSERT INTO events (kind, id, started_at, ended_at, state, trigger_score, rules_version, user_response, sos_status, sync_state, attempts, next_attempt_at, remote_ack) " +
+                    "VALUES ('sos', 'legacy-1', 1000, 2000, 'SOS_ACTIVE', 0.9, 'rules-v2', NULL, 'queued_on_watch', 'QUEUED', 0, 0, 0)",
+            )
+        }
+
+        val reopened = WearDatabase(ApplicationProvider.getApplicationContext<Context>())
+        val restored = reopened.pendingEvents(now = Long.MAX_VALUE)
+            .first { it.kind == WearDatabase.EVENT_KIND_SOS && it.event.id == "legacy-1" }
+            .event
+        assertEquals("rules-v2", restored.rulesVersion)
+        assertNull(restored.features)
+        assertNull(restored.baseline)
+        reopened.close()
+        db = WearDatabase(ApplicationProvider.getApplicationContext<Context>())
     }
 
     @Test
@@ -207,5 +514,303 @@ class WearDatabaseTest {
     private fun heartRateBpm(payload: String): Double {
         val json = org.json.JSONObject(payload)
         return json.getDouble("bpm")
+    }
+
+    @Test
+    fun `isTelemetryWindowConfirmed returns false when batches are pending`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 100_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        // Insert a batch covering the window but not confirmed
+        db.upsertBatch(
+            StoredBatch(
+                batchId = "batch-1",
+                fromMillis = 50_000L,
+                toMillis = 100_000L,
+                state = SyncState.SENT,
+                payload = "{}",
+                attempts = 1,
+                nextAttemptAt = 0L,
+                remoteAck = false,
+            ),
+        )
+
+        assertTrue(!db.isTelemetryWindowConfirmed(event))
+    }
+
+    @Test
+    fun `isTelemetryWindowConfirmed returns true when all covering batches confirmed`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 100_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        val telemetryId = db.insertReading(
+            SensorReading.HeartRate(
+                bpm = 80.0,
+                ibiMillis = listOf(750.0),
+                signalQuality = 0.9,
+                capturedAtEpochMillis = 100_000L,
+                source = "test",
+            ),
+        )
+        db.markTelemetrySent(listOf(telemetryId), "batch-1")
+        db.markTelemetryConfirmedByBatch("batch-1")
+
+        // Insert a batch covering the window and confirm it
+        db.upsertBatch(
+            StoredBatch(
+                batchId = "batch-1",
+                fromMillis = 50_000L,
+                toMillis = 100_000L,
+                state = SyncState.SENT,
+                payload = "{}",
+                attempts = 1,
+                nextAttemptAt = 0L,
+                remoteAck = false,
+            ),
+        )
+        db.markBatchConfirmed("batch-1")
+
+        assertTrue(db.isTelemetryWindowConfirmed(event))
+    }
+
+    @Test
+    fun `isTelemetryWindowConfirmed returns false when no telemetry rows in window`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 100_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        // No telemetry rows in window -> false
+        assertTrue(!db.isTelemetryWindowConfirmed(event))
+    }
+
+    @Test
+    fun `isSuspectedEventConfirmed returns false for queued suspected`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+        assertTrue(!db.isSuspectedEventConfirmed(event.id))
+    }
+
+    @Test
+    fun `isSuspectedEventConfirmed returns true after markEventConfirmed`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+        db.markEventConfirmed(WearDatabase.EVENT_KIND_SUSPECTED, event.id)
+        assertTrue(db.isSuspectedEventConfirmed(event.id))
+    }
+
+    @Test
+    fun `isDecisionEventConfirmed returns false for queued decision`() {
+        val event = PendingEvent(
+            id = "decision-1",
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.INTERVENTION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+            userResponse = com.anxietywatch.wear.domain.UserResponse.USER_OK,
+            endedAtEpochMillis = 2_000L,
+        )
+        db.upsertDecisionEvent(event)
+        assertTrue(!db.isDecisionEventConfirmed(event.id))
+    }
+
+    @Test
+    fun `isDecisionEventConfirmed returns true after markEventConfirmed`() {
+        val event = PendingEvent(
+            id = "decision-2",
+            startedAtEpochMillis = 1_000L,
+            state = MonitoringState.INTERVENTION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+            userResponse = com.anxietywatch.wear.domain.UserResponse.USER_OK,
+            endedAtEpochMillis = 2_000L,
+        )
+        db.upsertDecisionEvent(event)
+        db.markEventConfirmed(WearDatabase.EVENT_KIND_DECISION, event.id)
+        assertTrue(db.isDecisionEventConfirmed(event.id))
+    }
+
+    @Test
+    fun `isTelemetryWindowConfirmed false when queued telemetry in window`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 100_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        val values = android.content.ContentValues().apply {
+            put("id", "telemetry-queued")
+            put("captured_at", 80_000L)
+            put("type", "heart_rate")
+            put("payload", "{}")
+            put("sync_state", SyncState.QUEUED.name)
+        }
+        db.writableDatabase.insert("telemetry", null, values)
+
+        assertTrue(!db.isTelemetryWindowConfirmed(event))
+    }
+
+    @Test
+    fun `isTelemetryWindowConfirmed false when failed telemetry in window`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 100_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        val values = android.content.ContentValues().apply {
+            put("id", "telemetry-failed")
+            put("captured_at", 80_000L)
+            put("type", "heart_rate")
+            put("payload", "{}")
+            put("sync_state", SyncState.FAILED.name)
+        }
+        db.writableDatabase.insert("telemetry", null, values)
+
+        assertTrue(!db.isTelemetryWindowConfirmed(event))
+    }
+
+    @Test
+    fun `isTelemetryWindowConfirmed false when sent unconfirmed telemetry in window`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 100_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        val values = android.content.ContentValues().apply {
+            put("id", "telemetry-sent")
+            put("captured_at", 80_000L)
+            put("type", "heart_rate")
+            put("payload", "{}")
+            put("sync_state", SyncState.SENT.name)
+        }
+        db.writableDatabase.insert("telemetry", null, values)
+
+        assertTrue(!db.isTelemetryWindowConfirmed(event))
+    }
+
+    @Test
+    fun `isTelemetryWindowConfirmed true when all local telemetry rows in window confirmed`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 100_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        val id = "telemetry-confirmed"
+        val values = android.content.ContentValues().apply {
+            put("id", id)
+            put("captured_at", 80_000L)
+            put("type", "heart_rate")
+            put("payload", "{}")
+            put("sync_state", SyncState.QUEUED.name)
+        }
+        db.writableDatabase.insert("telemetry", null, values)
+        db.markTelemetrySent(listOf(id), "batch-1")
+        db.markTelemetryConfirmedByBatch("batch-1")
+
+        assertTrue(db.isTelemetryWindowConfirmed(event))
+    }
+
+    @Test
+    fun `isTelemetryWindowConfirmed true pending telemetry after T does not block`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 100_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        val id1 = "telemetry-confirmed"
+        var values = android.content.ContentValues().apply {
+            put("id", id1)
+            put("captured_at", 80_000L)
+            put("type", "heart_rate")
+            put("payload", "{}")
+            put("sync_state", SyncState.QUEUED.name)
+        }
+        db.writableDatabase.insert("telemetry", null, values)
+        db.markTelemetrySent(listOf(id1), "batch-1")
+        db.markTelemetryConfirmedByBatch("batch-1")
+
+        val id2 = "telemetry-after"
+        values = android.content.ContentValues().apply {
+            put("id", id2)
+            put("captured_at", 120_000L)
+            put("type", "heart_rate")
+            put("payload", "{}")
+            put("sync_state", SyncState.QUEUED.name)
+        }
+        db.writableDatabase.insert("telemetry", null, values)
+
+        assertTrue(db.isTelemetryWindowConfirmed(event))
+    }
+
+    @Test
+    fun `isTelemetryWindowConfirmed true pending telemetry before T-60 does not block`() {
+        val event = PendingEvent(
+            startedAtEpochMillis = 100_000L,
+            state = MonitoringState.USER_VALIDATION,
+            triggerScore = 0.8,
+            rulesVersion = "rules-v2",
+        )
+        db.upsertSuspectedEvent(event)
+
+        val id1 = "telemetry-confirmed"
+        var values = android.content.ContentValues().apply {
+            put("id", id1)
+            put("captured_at", 80_000L)
+            put("type", "heart_rate")
+            put("payload", "{}")
+            put("sync_state", SyncState.QUEUED.name)
+        }
+        db.writableDatabase.insert("telemetry", null, values)
+        db.markTelemetrySent(listOf(id1), "batch-1")
+        db.markTelemetryConfirmedByBatch("batch-1")
+
+        val id2 = "telemetry-before"
+        values = android.content.ContentValues().apply {
+            put("id", id2)
+            put("captured_at", 30_000L)
+            put("type", "heart_rate")
+            put("payload", "{}")
+            put("sync_state", SyncState.QUEUED.name)
+        }
+        db.writableDatabase.insert("telemetry", null, values)
+
+        assertTrue(db.isTelemetryWindowConfirmed(event))
     }
 }

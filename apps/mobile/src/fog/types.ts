@@ -1,5 +1,10 @@
 export type FogKind =
-  'telemetry' | 'sos' | 'sos-cancel' | 'suspected' | 'capabilities';
+  | 'telemetry'
+  | 'sos'
+  | 'sos-cancel'
+  | 'suspected'
+  | 'decision'
+  | 'capabilities';
 
 export interface FogEntry {
   kind: FogKind;
@@ -44,6 +49,82 @@ export interface WearSosEnvelope {
 export interface WearSosCancelEnvelope extends WearSosEnvelope {
   cancelled: true;
   cancelledAt?: string;
+}
+
+export interface SuspectedEventFeaturesPayload {
+  heartRateMean: number | null;
+  heartRateMax: number | null;
+  heartRateSlopeBpmPerMinute: number | null;
+  heartRateDeltaFromBaseline: number | null;
+  rmssdMillis: number | null;
+  sdnnMillis: number | null;
+  movementMagnitudeMean: number | null;
+  movementVariance: number | null;
+  validSampleRatio: number;
+  lastSampleAgeSeconds: number;
+  sampleCount: number;
+}
+
+export interface SuspectedEventBaselinePayload {
+  sampleCount: number;
+  meanHeartRate: number;
+  heartRateM2: number;
+  updatedAtEpochMillis: number;
+}
+
+export interface WearSuspectedEventEnvelope {
+  schemaVersion: string;
+  targetEndpoint: string;
+  transport: string;
+  eventId: string;
+  detectedAt: string;
+  state: string;
+  score: number;
+  rulesVersion: string;
+  features: SuspectedEventFeaturesPayload | null;
+  baseline: SuspectedEventBaselinePayload | null;
+  mobileEnrichmentRequired: string[];
+}
+
+export interface WearEventDecisionEnvelope {
+  schemaVersion: string;
+  targetEndpoint: string;
+  transport: string;
+  eventId: string;
+  detectedAt: string;
+  respondedAt: string;
+  response: string;
+  mobileEnrichmentRequired: string[];
+}
+
+export type PrimaryUserDecision =
+  | 'ACTIVITY_CONFIRMED'
+  | 'USER_OK'
+  | 'SUPPORT_REQUESTED';
+
+export interface SuspectedEventPayload {
+  eventId: string;
+  userId: string;
+  deviceId: string;
+  sessionId: string;
+  sequence: number;
+  detectedAt: string;
+  state: string;
+  score: number;
+  rulesVersion: string;
+  features: SuspectedEventFeaturesPayload | null;
+  baseline: SuspectedEventBaselinePayload | null;
+}
+
+export interface EventDecisionPayload {
+  eventId: string;
+  userId: string;
+  deviceId: string;
+  sessionId: string;
+  sequence: number;
+  detectedAt: string;
+  respondedAt: string;
+  response: string;
 }
 
 export type SignalQuality = 'good' | 'fair' | 'poor' | 'unknown';
