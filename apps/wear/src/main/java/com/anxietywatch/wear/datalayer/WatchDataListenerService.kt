@@ -21,26 +21,40 @@ class WatchDataListenerService : WearableListenerService() {
     override fun onMessageReceived(messageEvent: MessageEvent) {
         val path = messageEvent.path ?: return
         val runtime = (applicationContext as? AnxietyWatchApplication)?.runtime ?: return
-        when {
-            path.startsWith(BackendEndpointContract.ACK_TELEMETRY_PREFIX) -> {
-                runtime.handleAck(batchId = path.removePrefix(BackendEndpointContract.ACK_TELEMETRY_PREFIX))
+        when (ackKind(path)) {
+            AckKind.TELEMETRY -> {
+                runtime.handleAck(batchId = ackEventId(path, BackendEndpointContract.ACK_TELEMETRY_PREFIX))
             }
-            path.startsWith(BackendEndpointContract.ACK_SOS_PREFIX) -> {
-                runtime.handleAck(eventId = path.removePrefix(BackendEndpointContract.ACK_SOS_PREFIX))
+            AckKind.SOS -> {
+                runtime.handleAck(eventId = ackEventId(path, BackendEndpointContract.ACK_SOS_PREFIX))
             }
-            path.startsWith(BackendEndpointContract.ACK_SOS_CANCEL_PREFIX) -> {
-                runtime.handleAck(sosCancelEventId = path.removePrefix(BackendEndpointContract.ACK_SOS_CANCEL_PREFIX))
+            AckKind.SOS_CANCEL -> {
+                runtime.handleAck(sosCancelEventId = ackEventId(path, BackendEndpointContract.ACK_SOS_CANCEL_PREFIX))
             }
-            path.startsWith(BackendEndpointContract.ACK_SUSPECTED_PREFIX) -> {
-                runtime.handleAck(suspectedEventId = path.removePrefix(BackendEndpointContract.ACK_SUSPECTED_PREFIX))
+            AckKind.SUSPECTED -> {
+                runtime.handleAck(suspectedEventId = ackEventId(path, BackendEndpointContract.ACK_SUSPECTED_PREFIX))
             }
-            path.startsWith(BackendEndpointContract.ACK_DECISION_PREFIX) -> {
-                runtime.handleAck(decisionEventId = path.removePrefix(BackendEndpointContract.ACK_DECISION_PREFIX))
+            AckKind.DECISION -> {
+                runtime.handleAck(decisionEventId = ackEventId(path, BackendEndpointContract.ACK_DECISION_PREFIX))
             }
+            null -> Unit
         }
     }
 
     companion object {
         const val TAG = "WatchDataListener"
+
+        internal enum class AckKind { TELEMETRY, SOS, SOS_CANCEL, SUSPECTED, DECISION }
+
+        internal fun ackKind(path: String): AckKind? = when {
+            path.startsWith(BackendEndpointContract.ACK_TELEMETRY_PREFIX) -> AckKind.TELEMETRY
+            path.startsWith(BackendEndpointContract.ACK_SOS_PREFIX) -> AckKind.SOS
+            path.startsWith(BackendEndpointContract.ACK_SOS_CANCEL_PREFIX) -> AckKind.SOS_CANCEL
+            path.startsWith(BackendEndpointContract.ACK_SUSPECTED_PREFIX) -> AckKind.SUSPECTED
+            path.startsWith(BackendEndpointContract.ACK_DECISION_PREFIX) -> AckKind.DECISION
+            else -> null
+        }
+
+        internal fun ackEventId(path: String, prefix: String): String = path.removePrefix(prefix)
     }
 }
