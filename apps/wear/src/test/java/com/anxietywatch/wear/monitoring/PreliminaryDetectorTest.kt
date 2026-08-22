@@ -44,6 +44,39 @@ class PreliminaryDetectorTest {
         assertEquals(MonitoringState.USER_VALIDATION, result.decision)
     }
 
+    @Test
+    fun `suppresses new escalation during physical activity`() {
+        val result = PreliminaryDetector(config).evaluate(
+            features = features(delta = 40.0, slope = 18.0, rmssd = 22.0, movement = 0.02),
+            baseline = baseline,
+            physicalActivity = true,
+        )
+
+        assertEquals(MonitoringState.NORMAL, result.decision)
+        assertEquals(0.0, result.score, 0.0)
+    }
+
+    @Test
+    fun `physical activity does not synthesize activity confirmed`() {
+        val result = PreliminaryDetector(config).evaluate(
+            features = features(delta = 40.0, slope = 18.0, rmssd = 22.0, movement = 0.02),
+            baseline = baseline,
+            physicalActivity = true,
+        )
+
+        assertTrue(result.reasons.none { it.contains("ACTIVITY_CONFIRMED") })
+    }
+
+    @Test
+    fun `fresh qualifying evidence resumes after physical activity`() {
+        val detector = PreliminaryDetector(config)
+        val suppressed = detector.evaluate(features(40.0, 18.0, 22.0, 0.02), baseline, true)
+        val resumed = detector.evaluate(features(40.0, 18.0, 22.0, 0.02), baseline, false)
+
+        assertEquals(MonitoringState.NORMAL, suppressed.decision)
+        assertEquals(MonitoringState.USER_VALIDATION, resumed.decision)
+    }
+
     private fun features(
         delta: Double,
         slope: Double,

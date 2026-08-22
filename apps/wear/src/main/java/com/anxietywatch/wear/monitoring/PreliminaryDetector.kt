@@ -9,7 +9,19 @@ import com.anxietywatch.wear.domain.RulesConfig
 class PreliminaryDetector(
     private val config: RulesConfig,
 ) {
-    fun evaluate(features: DerivedFeatures, baseline: BaselineSnapshot): DetectionResult {
+    fun evaluate(
+        features: DerivedFeatures,
+        baseline: BaselineSnapshot,
+        physicalActivity: Boolean = false,
+    ): DetectionResult {
+        if (physicalActivity) {
+            return DetectionResult(
+                score = 0.0,
+                decision = MonitoringState.NORMAL,
+                reasons = listOf("Actividad física: escalamiento automático suprimido"),
+                rulesVersion = config.version,
+            )
+        }
         if (baseline.sampleCount < config.calibrationSamples || features.sampleCount < 5) {
             return DetectionResult(
                 score = 0.0,

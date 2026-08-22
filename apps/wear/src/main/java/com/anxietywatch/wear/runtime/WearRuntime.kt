@@ -362,7 +362,11 @@ class WearRuntime(context: Context) {
             baseline = baseline,
             nowEpochMillis = reading.capturedAtEpochMillis,
         )
-        val detection = detector.evaluate(features, baseline)
+        val detection = detector.evaluate(
+            features = features,
+            baseline = baseline,
+            physicalActivity = mutableState.value.physicalActivity,
+        )
         val nextState = stateMachine.onDetection(detection.decision)
         mutableState.value = mutableState.value.copy(
             heartRateBpm = reading.bpm.toInt(),
