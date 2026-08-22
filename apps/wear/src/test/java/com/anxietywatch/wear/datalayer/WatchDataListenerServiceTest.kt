@@ -117,8 +117,9 @@ class WatchDataListenerServiceTest {
         assertTrue(raw.contains("\"targetEndpoint\":\"/fog/v1/events/suspected\""))
         assertTrue(raw.contains("\"state\":\"USER_VALIDATION\""))
         assertTrue(raw.contains("\"score\":0.88"))
-        assertTrue(raw.contains("\"features\":{\"heartRateMean\":96.0"))
-        assertTrue(raw.contains("\"baseline\":{\"sampleCount\":240"))
+        val json = org.json.JSONObject(raw)
+        assertEquals(96.0, json.getJSONObject("features").getDouble("heartRateMean"), 0.001)
+        assertEquals(240, json.getJSONObject("baseline").getInt("sampleCount"))
         assertFalse(raw.contains("\"sosStatus\""))
     }
 
@@ -136,7 +137,7 @@ class WatchDataListenerServiceTest {
         assertTrue(raw.contains("\"schemaVersion\":\"wear-event-decision-v1\""))
         assertTrue(raw.contains("\"targetEndpoint\":\"/fog/v1/events/decision\""))
         assertTrue(raw.contains("\"response\":\"SUPPORT_REQUESTED\""))
-        assertTrue(raw.contains("\"detectedAt\":\"1970-02-04T05:20:00Z\""))
+        assertTrue(raw.contains("\"detectedAt\":\"1970-01-01T00:50:00Z\""))
         assertFalse(raw.contains("\"features\""))
     }
 

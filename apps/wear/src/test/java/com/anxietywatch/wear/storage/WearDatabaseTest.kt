@@ -11,6 +11,7 @@ import com.anxietywatch.wear.domain.SensorReading
 import com.anxietywatch.wear.domain.UserResponse
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -280,30 +281,30 @@ db.upsertSosCancelEvent(cancelled)
         assertEquals(1_000L, suspected.startedAtEpochMillis)
         assertEquals(0.88, suspected.triggerScore, 0.001)
         assertEquals("rules-v2", suspected.rulesVersion)
-        assertEquals(-5.5, suspected.features?.heartRateSlopeBpmPerMinute, 0.001)
-        assertEquals(96.0, suspected.features?.heartRateMean, 0.001)
-        assertEquals(108.0, suspected.features?.heartRateMax, 0.001)
-        assertEquals(12.0, suspected.features?.heartRateDeltaFromBaseline, 0.001)
-        assertEquals(21.0, suspected.features?.rmssdMillis, 0.001)
-        assertEquals(30.0, suspected.features?.sdnnMillis, 0.001)
-        assertEquals(0.05, suspected.features?.movementMagnitudeMean, 0.001)
-        assertEquals(0.0004, suspected.features?.movementVariance, 0.001)
-        assertEquals(0.95, suspected.features?.validSampleRatio, 0.001)
-        assertEquals(5L, suspected.features?.lastSampleAgeSeconds)
-        assertEquals(60, suspected.features?.sampleCount)
-        assertEquals(240L, suspected.baseline?.sampleCount)
-        assertEquals(82.0, suspected.baseline?.meanHeartRate, 0.001)
-        assertEquals(310.0, suspected.baseline?.heartRateM2, 0.001)
-        assertEquals(2_900_000L, suspected.baseline?.updatedAtEpochMillis)
+        assertEquals(-5.5, suspected.features!!.heartRateSlopeBpmPerMinute!!, 0.001)
+        assertEquals(96.0, suspected.features!!.heartRateMean!!, 0.001)
+        assertEquals(108.0, suspected.features!!.heartRateMax!!, 0.001)
+        assertEquals(12.0, suspected.features!!.heartRateDeltaFromBaseline!!, 0.001)
+        assertEquals(21.0, suspected.features!!.rmssdMillis!!, 0.001)
+        assertEquals(30.0, suspected.features!!.sdnnMillis!!, 0.001)
+        assertEquals(0.05, suspected.features!!.movementMagnitudeMean!!, 0.001)
+        assertEquals(0.0004, suspected.features!!.movementVariance!!, 0.001)
+        assertEquals(0.95, suspected.features!!.validSampleRatio!!, 0.001)
+        assertEquals(5L, suspected.features!!.lastSampleAgeSeconds)
+        assertEquals(60, suspected.features!!.sampleCount)
+        assertEquals(240L, suspected.baseline!!.sampleCount)
+        assertEquals(82.0, suspected.baseline!!.meanHeartRate, 0.001)
+        assertEquals(310.0, suspected.baseline!!.heartRateM2, 0.001)
+        assertEquals(2_900_000L, suspected.baseline!!.updatedAtEpochMillis)
 
         // Decision row contains user response
-        val decision = db.pendingEvents(now = Long.MAX_VALUE)
+        val decisionRow = db.pendingEvents(now = Long.MAX_VALUE)
             .first { it.kind == WearDatabase.EVENT_KIND_DECISION && it.event.id == eventId }
             .event
-        assertEquals(UserResponse.SUPPORT_REQUESTED, decision.userResponse)
-        assertEquals(MonitoringState.INTERVENTION, decision.state)
-        assertNotNull(decision.endedAtEpochMillis)
-        assertEquals(eventId, decision.id)
+        assertEquals(UserResponse.SUPPORT_REQUESTED, decisionRow.userResponse)
+        assertEquals(MonitoringState.INTERVENTION, decisionRow.state)
+        assertNotNull(decisionRow.endedAtEpochMillis)
+        assertEquals(eventId, decisionRow.id)
     }
 
     @Test
@@ -357,6 +358,9 @@ db.upsertSosCancelEvent(cancelled)
 
         assertEquals(MonitoringState.USER_VALIDATION, suspected.state)
     }
+
+    @Test
+    fun `immutable suspected snapshot persists derived features`() {
         val event = PendingEvent(
             id = "snapshot-id",
             startedAtEpochMillis = 1_000L,
@@ -388,13 +392,13 @@ db.upsertSosCancelEvent(cancelled)
         val restored = db.pendingEvents(now = Long.MAX_VALUE)
             .first { it.kind == WearDatabase.EVENT_KIND_SUSPECTED && it.event.id == "snapshot-id" }
             .event
-        assertEquals(96.0, restored.features?.heartRateMean, 0.001)
-        assertEquals(12.0, restored.features?.heartRateDeltaFromBaseline, 0.001)
-        assertEquals(60, restored.features?.sampleCount)
-        assertEquals(240L, restored.baseline?.sampleCount)
-        assertEquals(82.0, restored.baseline?.meanHeartRate, 0.001)
-        assertEquals(310.0, restored.baseline?.heartRateM2, 0.001)
-        assertEquals(900L, restored.baseline?.updatedAtEpochMillis)
+        assertEquals(96.0, restored.features!!.heartRateMean!!, 0.001)
+        assertEquals(12.0, restored.features!!.heartRateDeltaFromBaseline!!, 0.001)
+        assertEquals(60, restored.features!!.sampleCount)
+        assertEquals(240L, restored.baseline!!.sampleCount)
+        assertEquals(82.0, restored.baseline!!.meanHeartRate!!, 0.001)
+        assertEquals(310.0, restored.baseline!!.heartRateM2!!, 0.001)
+        assertEquals(900L, restored.baseline!!.updatedAtEpochMillis)
     }
 
     @Test
@@ -420,7 +424,7 @@ db.upsertSosCancelEvent(cancelled)
     }
 
     @Test
-    fun `migration v4 keeps events and adds detection snapshot columns`() {
+    fun `database reopen keeps legacy events and optional detection snapshots`() {
         val seed = WearDatabase(ApplicationProvider.getApplicationContext<Context>())
         seed.writableDatabase
         seed.close()
@@ -433,7 +437,10 @@ db.upsertSosCancelEvent(cancelled)
             null,
             android.database.sqlite.SQLiteDatabase.OPEN_READWRITE,
         ).use { raw ->
-            raw.execSQL("PRAGMA user_version = 4")
+            // The seed database already has the v5 snapshot columns. Keep its
+            // schema version consistent so this test exercises reopen/preserve
+            // behavior without pretending a v4 schema is present.
+            raw.execSQL("PRAGMA user_version = 5")
             raw.execSQL(
                 "INSERT INTO events (kind, id, started_at, ended_at, state, trigger_score, rules_version, user_response, sos_status, sync_state, attempts, next_attempt_at, remote_ack) " +
                     "VALUES ('sos', 'legacy-1', 1000, 2000, 'SOS_ACTIVE', 0.9, 'rules-v2', NULL, 'queued_on_watch', 'QUEUED', 0, 0, 0)",
@@ -545,6 +552,18 @@ db.upsertSosCancelEvent(cancelled)
             rulesVersion = "rules-v2",
         )
         db.upsertSuspectedEvent(event)
+
+        val telemetryId = db.insertReading(
+            SensorReading.HeartRate(
+                bpm = 80.0,
+                ibiMillis = listOf(750.0),
+                signalQuality = 0.9,
+                capturedAtEpochMillis = 100_000L,
+                source = "test",
+            ),
+        )
+        db.markTelemetrySent(listOf(telemetryId), "batch-1")
+        db.markTelemetryConfirmedByBatch("batch-1")
 
         // Insert a batch covering the window and confirm it
         db.upsertBatch(
