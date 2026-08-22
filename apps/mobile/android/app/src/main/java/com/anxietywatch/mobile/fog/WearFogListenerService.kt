@@ -130,8 +130,8 @@ class WearFogListenerService : WearableListenerService() {
         const val ACK_TELEMETRY_PREFIX = "/fog/v1/ack/telemetry/"
         const val ACK_SOS_PREFIX = "/fog/v1/ack/sos/"
         const val ACK_SOS_CANCEL_PREFIX = "/fog/v1/ack/sos-cancel/"
-        const val ACK_SUSPECTED_PREFIX = "/fog/v1/ack/suspected/"
-        const val ACK_DECISION_PREFIX = "/fog/v1/ack/decision/"
+        const val ACK_SUSPECTED_PREFIX = "/fog/v1/ack/events/suspected/"
+        const val ACK_DECISION_PREFIX = "/fog/v1/ack/events/decision/"
         const val CapabilitiesKey = "capabilities"
 
         const val TELEMETRY_KIND = "telemetry"
