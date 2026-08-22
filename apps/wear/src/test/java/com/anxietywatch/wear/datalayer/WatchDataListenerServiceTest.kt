@@ -54,6 +54,26 @@ class WatchDataListenerServiceTest {
     }
 
     @Test
+    fun `listener extracts event ids and rejects legacy ack paths`() {
+        assertEquals(
+            "event-abc",
+            WatchDataListenerService.ackEventId(
+                "/fog/v1/ack/events/suspected/event-abc",
+                BackendEndpointContract.ACK_SUSPECTED_PREFIX,
+            ),
+        )
+        assertEquals(
+            "event-def",
+            WatchDataListenerService.ackEventId(
+                "/fog/v1/ack/events/decision/event-def",
+                BackendEndpointContract.ACK_DECISION_PREFIX,
+            ),
+        )
+        assertEquals(null, WatchDataListenerService.ackKind("/fog/v1/ack/suspected/event-abc"))
+        assertEquals(null, WatchDataListenerService.ackKind("/fog/v1/ack/decision/event-def"))
+    }
+
+    @Test
     fun `telemetry route is the fog endpoint plus batch id`() {
         assertEquals("/fog/v1/telemetry/batch-123", BackendEndpointContract.telemetryPath("batch-123"))
         assertEquals("/fog/v1/telemetry", BackendEndpointContract.TELEMETRY_ENDPOINT)

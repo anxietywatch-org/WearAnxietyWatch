@@ -23,19 +23,19 @@ class WatchDataListenerService : WearableListenerService() {
         val runtime = (applicationContext as? AnxietyWatchApplication)?.runtime ?: return
         when (ackKind(path)) {
             AckKind.TELEMETRY -> {
-                runtime.handleAck(batchId = path.removePrefix(BackendEndpointContract.ACK_TELEMETRY_PREFIX))
+                runtime.handleAck(batchId = ackEventId(path, BackendEndpointContract.ACK_TELEMETRY_PREFIX))
             }
             AckKind.SOS -> {
-                runtime.handleAck(eventId = path.removePrefix(BackendEndpointContract.ACK_SOS_PREFIX))
+                runtime.handleAck(eventId = ackEventId(path, BackendEndpointContract.ACK_SOS_PREFIX))
             }
             AckKind.SOS_CANCEL -> {
-                runtime.handleAck(sosCancelEventId = path.removePrefix(BackendEndpointContract.ACK_SOS_CANCEL_PREFIX))
+                runtime.handleAck(sosCancelEventId = ackEventId(path, BackendEndpointContract.ACK_SOS_CANCEL_PREFIX))
             }
             AckKind.SUSPECTED -> {
-                runtime.handleAck(suspectedEventId = path.removePrefix(BackendEndpointContract.ACK_SUSPECTED_PREFIX))
+                runtime.handleAck(suspectedEventId = ackEventId(path, BackendEndpointContract.ACK_SUSPECTED_PREFIX))
             }
             AckKind.DECISION -> {
-                runtime.handleAck(decisionEventId = path.removePrefix(BackendEndpointContract.ACK_DECISION_PREFIX))
+                runtime.handleAck(decisionEventId = ackEventId(path, BackendEndpointContract.ACK_DECISION_PREFIX))
             }
             null -> Unit
         }
@@ -54,5 +54,7 @@ class WatchDataListenerService : WearableListenerService() {
             path.startsWith(BackendEndpointContract.ACK_DECISION_PREFIX) -> AckKind.DECISION
             else -> null
         }
+
+        internal fun ackEventId(path: String, prefix: String): String = path.removePrefix(prefix)
     }
 }
