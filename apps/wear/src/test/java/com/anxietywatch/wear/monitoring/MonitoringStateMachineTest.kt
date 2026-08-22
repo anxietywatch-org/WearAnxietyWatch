@@ -23,4 +23,12 @@ class MonitoringStateMachineTest {
         assertEquals(MonitoringState.SOS_ACTIVE, machine.confirmSos())
         assertEquals(MonitoringState.RESOLVED, machine.onUserResponse(UserResponse.SOS_CANCELLED))
     }
+
+    @Test
+    fun `activity does not auto answer an active validation`() {
+        val machine = MonitoringStateMachine(MonitoringState.USER_VALIDATION)
+
+        assertEquals(MonitoringState.USER_VALIDATION, machine.onDetection(MonitoringState.NORMAL))
+        assertEquals(MonitoringState.COOLDOWN, machine.onUserResponse(UserResponse.ACTIVITY_CONFIRMED))
+    }
 }
